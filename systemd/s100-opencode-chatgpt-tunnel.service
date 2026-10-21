@@ -1,0 +1,16 @@
+[Unit]
+Description=S100-1 independent ChatGPT Secure MCP Tunnel
+After=network-online.target s100-opencode-mcp.service
+Wants=s100-opencode-mcp.service
+
+[Service]
+WorkingDirectory=/home/sunrise/.local/share/opencode-mcp
+ExecStartPre=/home/sunrise/.local/bin/node -e "fetch('http://127.0.0.1:18878/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+ExecStart=/bin/bash /home/sunrise/.local/share/opencode-mcp/bin/start-tunnel.sh
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
