@@ -1,0 +1,15 @@
+[Unit]
+Description=S100-1 authenticated OpenCode 2.0.32 HTTP Server
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/sunrise
+ExecStart=/bin/bash /home/sunrise/.local/share/opencode-mcp/bin/start-opencode-server.sh
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
