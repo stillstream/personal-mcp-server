@@ -21,3 +21,9 @@ verification.json
 *smoke.json
 *.pyc
 __pycache__/
+
+# Machine-local deployment configuration and downloaded binaries
+deploy.env
+.personal-mcp-managed
+opt/
+bin/tunnel-client-v*

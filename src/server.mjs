@@ -3,15 +3,18 @@ import { spawn } from 'node:child_process'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { readFile, stat, mkdir, writeFile, chmod } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
+import { isAbsolute, resolve, join } from 'node:path'
+import { homedir } from 'node:os'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
 
-const HOST = process.env.S100_MCP_HOST || '127.0.0.1'
-const PORT = Number(process.env.S100_MCP_PORT || 18878)
+const HOST = process.env.MCP_HOST || process.env.S100_MCP_HOST || '127.0.0.1'
+const PORT = Number(process.env.MCP_PORT || process.env.S100_MCP_PORT || 18878)
 const MCP_PATH = '/mcp'
-const TOKEN_FILE = process.env.S100_MCP_TOKEN_FILE || '/home/sunrise/.local/share/opencode-mcp/runtime/access-token'
+const TOKEN_FILE = process.env.MCP_TOKEN_FILE || process.env.S100_MCP_TOKEN_FILE || join(homedir(), '.local/share/opencode-mcp/runtime/access-token')
+const TOOL_PREFIX = process.env.MCP_TOOL_PREFIX || 's100'
+if (!/^[a-z][a-z0-9_]{0,31}$/.test(TOOL_PREFIX)) throw new Error('Invalid MCP_TOOL_PREFIX')
 const MAX_ACTIVE_TASKS = 32
 const MAX_RECORDED_TASKS = 128
 const MAX_CAPTURE_BYTES_PER_STREAM = 1024 * 1024
@@ -118,12 +121,12 @@ function registerTool(name, config, handler) {
   toolDefinitions.push([name, config, handler])
 }
 
-registerTool('s100_exec', {
-  title: 'Execute S100-1 host shell command',
-  description: 'Execute an arbitrary shell command on S100-1 as sunrise (not root); invoke /home/sunrise/.local/bin/opencode run for coding tasks. This tool can create, overwrite, move, or delete files, modify system configuration, and run any installed program; it has full user-level write and potentially destructive capability and is NOT read-only. No project-path whitelist is applied; actual access is limited only by sunrise Linux permissions and mounted read-only filesystems. Provide an absolute existing directory as cwd. Commands exceeding wait_ms continue in their own process group and return task_id.',
+registerTool(`${TOOL_PREFIX}_exec`, {
+  title: 'Execute remote host shell command',
+  description: 'Execute arbitrary shell commands as the Linux account running this MCP service (not necessarily root). Commands can read, write, or delete files anywhere that account is allowed to access; this service is NOT read-only and has no project-path whitelist. OpenCode CLI can also be invoked when installed. Provide an absolute existing cwd. Longer commands return a task_id for polling.',
   inputSchema: {
     command: z.string().min(1).max(100_000).describe('Arbitrary shell command/script/program invocation. May modify or delete data and system files.'),
-    cwd: z.string().min(1).refine(isAbsolute, 'cwd must be an absolute path').describe('Absolute existing directory on S100-1; there is no project-directory allowlist.'),
+    cwd: z.string().min(1).refine(isAbsolute, 'cwd must be an absolute path').describe('Absolute existing directory on the host; there is no project-directory allowlist.'),
     wait_ms: z.number().int().min(0).max(5000).default(1500).describe('Maximum time to wait before returning; 0–5000 milliseconds. Longer commands continue in the background.'),
   },
 }, async ({ command, cwd, wait_ms = 1500 }) => {
@@ -178,11 +181,11 @@ registerTool('s100_exec', {
   return response(result)
 })
 
-registerTool('s100_poll', {
-  title: 'Poll S100-1 command task',
-  description: 'Return newly captured stdout/stderr and current state for a task started by s100_exec on this service. Each poll advances that task’s output cursor. A response is capped at max_output_bytes total; truncated=true means earlier retained output was dropped or more output remains for a later poll. Completed task records are in-memory only and expire after two hours.',
+registerTool(`${TOOL_PREFIX}_poll`, {
+  title: 'Poll remote host command task',
+  description: `Return newly captured stdout/stderr and current state for a task started by ${TOOL_PREFIX}_exec on this service. Each poll advances that task’s output cursor. A response is capped at max_output_bytes total; truncated=true means earlier retained output was dropped or more output remains for a later poll. Completed task records are in-memory only and expire after two hours.`,
   inputSchema: {
-    task_id: z.string().uuid().describe('Task ID returned by s100_exec.'),
+    task_id: z.string().uuid().describe(`Task ID returned by ${TOOL_PREFIX}_exec.`),
     max_output_bytes: z.number().int().min(1024).max(MAX_RESPONSE_BYTES).default(DEFAULT_RESPONSE_BYTES).describe('Maximum combined stdout and stderr bytes in this response, from 1024 through 65536.'),
   },
 }, async ({ task_id, max_output_bytes = DEFAULT_RESPONSE_BYTES }) => {
@@ -193,11 +196,11 @@ registerTool('s100_poll', {
   return response({ task_id, ...result })
 })
 
-registerTool('s100_stop', {
-  title: 'Stop S100-1 command task',
-  description: 'Stop only the process group created and owned by this s100-opencode-mcp service for the supplied task_id. Sends SIGTERM, then SIGKILL after a short grace period if that same process group remains. It does not search for or kill unrelated host processes. This is a state-changing operation.',
+registerTool(`${TOOL_PREFIX}_stop`, {
+  title: 'Stop remote host command task',
+  description: 'Stop only the process group created by this MCP service for the supplied task_id. Sends SIGTERM, then SIGKILL after a short grace period if that same process group remains. It does not search for or kill unrelated host processes. This is a state-changing operation.',
   inputSchema: {
-    task_id: z.string().uuid().describe('Task ID returned by s100_exec; only service-owned tasks can be stopped.'),
+    task_id: z.string().uuid().describe(`Task ID returned by ${TOOL_PREFIX}_exec; only service-owned tasks can be stopped.`),
   },
 }, async ({ task_id }) => {
   const task = tasks.get(task_id)
@@ -228,13 +231,13 @@ const tokenEqual = (request) => {
 const httpServer = createServer(async (request, res) => {
   const path = request.url?.split('?')[0]
   if (request.method === 'GET' && path === '/healthz') {
-    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, service: 's100-opencode-mcp', uid: process.getuid?.() ?? null }))
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, service: 'personal-mcp-server', uid: process.getuid?.() ?? null }))
     return
   }
   if (path !== MCP_PATH) { res.writeHead(404).end('not found'); return }
   if (!tokenEqual(request)) { res.writeHead(401, { 'www-authenticate': 'Bearer' }).end('unauthorized'); return }
   if (!['POST', 'GET', 'DELETE'].includes(request.method || '')) { res.writeHead(405).end('method not allowed'); return }
-  const requestServer = new McpServer({ name: 's100-opencode-mcp', version: '0.1.0' }, { capabilities: { tools: {} } })
+  const requestServer = new McpServer({ name: 'personal-mcp-server', version: '0.1.0' }, { capabilities: { tools: {} } })
   // Tools are registered once per transport instance; handlers close over the process-wide task table.
   for (const [name, config, handler] of toolDefinitions) requestServer.registerTool(name, config, handler)
   const transport = new StreamableHTTPServerTransport({})
@@ -251,7 +254,7 @@ const httpServer = createServer(async (request, res) => {
 
 httpServer.on('clientError', (_error, socket) => socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'))
 httpServer.listen(PORT, HOST, () => {
-  void log(`service_ready host=${HOST} port=${PORT} uid=${process.getuid?.() ?? 'unknown'} gid=${process.getgid?.() ?? 'unknown'} tools=s100_exec,s100_poll,s100_stop`)
+  void log(`service_ready host=${HOST} port=${PORT} uid=${process.getuid?.() ?? 'unknown'} gid=${process.getgid?.() ?? 'unknown'} tools=${TOOL_PREFIX}_exec,${TOOL_PREFIX}_poll,${TOOL_PREFIX}_stop`)
 })
 
 async function shutdown(signal) {

@@ -4,10 +4,13 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { readFile } from 'node:fs/promises'
-const token = (await readFile(new URL('../runtime/access-token', import.meta.url), 'utf8')).trim()
-const upstream = new Client({name:'s100-stdio-client',version:'1.0.0'})
-await upstream.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:18878/mcp'), {requestInit:{headers:{Authorization:'Bearer '+token}}}))
-const server = new Server({name:'s100-opencode-mcp-stdio',version:'1.0.0'},{capabilities:{tools:{}}})
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+const tokenFile = process.env.MCP_TOKEN_FILE || join(homedir(), '.local/share/opencode-mcp/runtime/access-token')
+const token = (await readFile(tokenFile, 'utf8')).trim()
+const upstream = new Client({name:'personal-stdio-client',version:'1.0.0'})
+await upstream.connect(new StreamableHTTPClientTransport(new URL(process.env.MCP_URL || `http://127.0.0.1:${process.env.MCP_PORT || 18878}/mcp`), {requestInit:{headers:{Authorization:'Bearer '+token}}}))
+const server = new Server({name:'personal-mcp-stdio',version:'1.0.0'},{capabilities:{tools:{}}})
 server.setRequestHandler(ListToolsRequestSchema, async () => upstream.listTools())
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => upstream.callTool(request.params, undefined, {timeout:65000,signal:extra.signal}))
 await server.connect(new StdioServerTransport())

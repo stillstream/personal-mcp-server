@@ -1,0 +1,17 @@
+[Unit]
+Description=Personal ChatGPT Secure MCP Tunnel
+After=network-online.target personal-mcp.service
+Requires=personal-mcp.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/opencode-mcp
+ExecStart=/bin/bash %h/.local/share/opencode-mcp/bin/start-tunnel.sh
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Personal OpenCode v2 HTTP Server (loopback)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=/bin/bash %h/.local/share/opencode-mcp/bin/start-opencode-server.sh
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
