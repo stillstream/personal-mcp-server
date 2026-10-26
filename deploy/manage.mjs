@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+import {readFile,writeFile,mkdir,rename,lstat,readdir} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {join,resolve,isAbsolute} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {randomUUID,randomBytes} from 'node:crypto';
+import {PROJECT_ROOT,DEFAULT_CONFIG,loadInstance,modelConfig} from '../src/instance-config.mjs';
+import {runtimeDirectory,privateRecord,runtimeHealth,RUNTIME_VERSION} from '../src/runtime-client.mjs';
+const exec=promisify(execFile),[command,...args]=process.argv.slice(2),node=process.execPath;
+export async function saveConfig(config,expected){const raw=await readFile(DEFAULT_CONFIG);if(expected&&!raw.equals(expected))throw Error('CONFIG_CHANGED_CONCURRENTLY');await mkdir(join(PROJECT_ROOT,'.local/rollback'),{recursive:true,mode:0o700});await writeFile(join(PROJECT_ROOT,'.local/rollback','config-'+randomUUID()+'.json'),raw,{mode:0o600,flag:'wx'});const temp=DEFAULT_CONFIG+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(config,null,2)+'\n',{mode:0o600,flag:'wx'});try{await loadInstance(temp)}catch(e){await import('node:fs/promises').then(fs=>fs.unlink(temp));throw e}if(!(await readFile(DEFAULT_CONFIG)).equals(raw))throw Error('CONFIG_CHANGED_CONCURRENTLY');await rename(temp,DEFAULT_CONFIG);}
+function units(c){return ['agent-mcp.service',...(c.runtime?.host?.enabled?['agent-mcp-opencode-host.service']:[]),...(c.containers||[]).filter(x=>x.opencode?.enabled).map(x=>'agent-mcp-opencode-container-'+x.name+'.service'),...(c.advisor_mcp?.enabled&&c.tunnel_client?.enabled?['agent-mcp-advisor-tunnel.service']:[])];}
+async function version(binary,container,run=exec){const result=container?await run('/usr/bin/docker',['exec',container,binary,'--version'],{timeout:5000}):await run(binary,['--version'],{timeout:5000});if(!result.stdout.includes('v'+RUNTIME_VERSION))throw Error('OPENCODE_VERSION_MUST_BE_2_1_2');}
+export function assertContainerIdentity(row,inspected){if(!row.container_id)throw Error('CONTAINER_NOT_REGISTERED_USE_ADD_CONTAINER');if(row.container_id!==inspected.Id)throw Error('CONTAINER_CHANGED_REQUIRE_REREGISTER');if(!inspected.State.Running)throw Error('CONTAINER_NOT_RUNNING');}
+export function managementConfigPath(env=process.env){if(env.AGENT_MCP_CONFIG&&resolve(env.AGENT_MCP_CONFIG)!==DEFAULT_CONFIG)throw Error('MANAGEMENT_CONFIG_OVERRIDE_DENIED');return DEFAULT_CONFIG;}
+export async function prepareTarget(c,target,name,{run=exec}={}){
+ const row=target==='host'?c.runtime?.host:c.containers.find(x=>x.name===name)?.opencode;if(!row?.enabled)throw Error('TARGET_NOT_ENABLED');
+ let inspected;if(target==='container'){inspected=JSON.parse((await run('/usr/bin/docker',['inspect','--format','{{json .}}',name],{timeout:5000,maxBuffer:1000000})).stdout);assertContainerIdentity(row,inspected);}
+ const dir=runtimeDirectory(target,name);await mkdir(dir,{recursive:true,mode:0o700});const port=row.port;if(!Number.isInteger(port)||port<1024||port>65535)throw Error('BACKEND_PORT_INVALID');
+ let auth;try{auth=await privateRecord(join(dir,'auth.json'))}catch(e){if(e.code!=='ENOENT')throw e;auth={password:randomBytes(32).toString('base64url')};await writeFile(join(dir,'auth.json'),JSON.stringify(auth),{mode:0o600,flag:'wx'});}
+ const profile=await modelConfig(c,target,name);const allow=[{action:'*',resource:'*',effect:'allow'}];const cfg={...profile,permissions:allow,agents:{build:{permissions:allow}},plugin:c.runtime.plugins||[],mcp:{servers:{}},update:'disable'};
+ const binary=row.binary;let meta={target,container:name||null,version:RUNTIME_VERSION,binary,port,cwd:row.cwd|| (target==='host'?process.env.HOME:'/tmp')};
+ if(target==='host'){await version(binary,undefined,run);meta.profile_root=join(dir,'profile');for(const sub of ['home','config/opencode','data','state','cache','tmp'])await mkdir(join(meta.profile_root,sub),{recursive:true,mode:0o700});await writeFile(join(meta.profile_root,'config/opencode/opencode.json'),JSON.stringify(cfg),{mode:0o600});await writeFile(join(meta.profile_root,'config/opencode/service.json'),JSON.stringify(auth),{mode:0o600});}
+ else{await run('/usr/bin/docker',['exec',inspected.Id,'python3','--version'],{timeout:5000});await version(binary,inspected.Id,run);meta.container_id=inspected.Id;meta.profile_root=row.state_root||'/tmp/agent-mcp-opencode-'+name;meta.marker='agent-mcp-native-'+name;
+ const setup='import os,sys;root=sys.argv[1];assert root.startswith("/tmp/agent-mcp-") and os.path.normpath(root)==root;dirs=[root]+[root+"/"+x for x in ["home","config/opencode","data","state","cache","tmp"]];[(os.makedirs(p,mode=0o700,exist_ok=True),os.chmod(p,0o700)) for p in dirs]';await run('/usr/bin/docker',['exec',inspected.Id,'python3','-c',setup,meta.profile_root],{timeout:5000});
+ const cfgFile=join(dir,'opencode.json'),authFile=join(dir,'service.json');await writeFile(cfgFile,JSON.stringify(cfg),{mode:0o600});await writeFile(authFile,JSON.stringify(auth),{mode:0o600});for(const [src,dest]of[[cfgFile,'opencode.json'],[authFile,'service.json']]){await run('/usr/bin/docker',['cp',src,inspected.Id+':'+meta.profile_root+'/config/opencode/'+dest],{timeout:10000});await run('/usr/bin/docker',['exec',inspected.Id,'chmod','600',meta.profile_root+'/config/opencode/'+dest]);}}
+ await writeFile(join(dir,'backend.json'),JSON.stringify(meta,null,2)+'\n',{mode:0o600});return {target,container:name||null,version:RUNTIME_VERSION,profile:dir};
+}
+export async function registerContainer(input,name,{binary:chosen,port:requested,run=exec}={}){
+ if(!name||!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name))throw Error('CONTAINER_NAME_REQUIRED');const c=structuredClone(input);c.containers||=[];if(!c.runtime?.host?.binary||!c.models?.host)throw Error('HOST_BASELINE_REQUIRED');let row=c.containers.find(x=>x.name===name);const binary=chosen||row?.opencode?.binary||'/tmp/agent-mcp-bin/opencode-2.1.2';if(!isAbsolute(binary)||binary.includes(String.fromCharCode(0)))throw Error('BINARY_PATH_INVALID');const used=[c.runtime.host.port,...c.containers.filter(x=>x.name!==name).map(x=>x.opencode?.port||0)];let port=requested??row?.opencode?.port??4101;if(!Number.isInteger(port)||port<1024||port>65535)throw Error('BACKEND_PORT_INVALID');if(requested!==undefined&&used.includes(port))throw Error('BACKEND_PORT_ALREADY_CONFIGURED');while(used.includes(port))port++;if(port>65535)throw Error('BACKEND_PORT_INVALID');
+ const d=JSON.parse((await run('/usr/bin/docker',['inspect','--format','{{json .}}',name])).stdout);if(!d.State.Running)throw Error('CONTAINER_NOT_RUNNING');try{await version(binary,d.Id,run)}catch{if(binary!=='/tmp/agent-mcp-bin/opencode-2.1.2')throw Error('CUSTOM_BINARY_MUST_ALREADY_BE_2_1_2');await version(c.runtime.host.binary,undefined,run);await run('/usr/bin/docker',['exec',d.Id,'mkdir','-p','-m','700','/tmp/agent-mcp-bin']);await run('/usr/bin/docker',['cp',c.runtime.host.binary,d.Id+':'+binary],{timeout:30000});await run('/usr/bin/docker',['exec',d.Id,'chmod','755',binary]);await version(binary,d.Id,run);}
+ if(!row){row={name};c.containers.push(row)}row.opencode={...row.opencode,enabled:true,binary,port,cwd:row.opencode?.cwd||'/tmp',state_root:row.opencode?.state_root||'/tmp/agent-mcp-opencode-'+name,container_id:d.Id};c.models.containers||={};c.models.containers[name]||=structuredClone(c.models.host);return c;
+}
+async function installUnits(c){
+  const dir=join(PROJECT_ROOT,'deploy/systemd');
+  await mkdir(dir,{recursive:true});
+  const env='Environment=AGENT_MCP_CONFIG='+DEFAULT_CONFIG+'\nEnvironment=PATH='+node.slice(0,node.lastIndexOf('/'))+':/usr/local/bin:/usr/bin:/bin\n';
+  const common='[Service]\nWorkingDirectory='+PROJECT_ROOT+'\n'+env;
+  const services=[
+    {unit:'agent-mcp.service',body:'[Unit]\nDescription=Agent MCP Gateway\nAfter=network-online.target\n\n'+common+'Type=simple\nExecStart='+node+' '+join(PROJECT_ROOT,'src/server.mjs')+'\nRestart=on-failure\nRestartSec=5\nUMask=0077\n\n[Install]\nWantedBy=default.target\n'},
+    {unit:'agent-mcp-advisor-tunnel.service',body:'[Unit]\nDescription=Agent MCP Advisor and Secure Tunnel\nRequires=agent-mcp.service\nAfter=agent-mcp.service network-online.target\n\n'+common+'Type=forking\nPIDFile='+join(PROJECT_ROOT,'.local/advisor/tunnel.pid')+'\nExecStartPre=/bin/bash '+join(PROJECT_ROOT,'components/advisor-mcp/start-openai-tunnel.sh')+' down\nExecStart=/bin/bash '+join(PROJECT_ROOT,'components/advisor-mcp/start-openai-tunnel.sh')+' up\nExecStop=/bin/bash '+join(PROJECT_ROOT,'components/advisor-mcp/start-openai-tunnel.sh')+' down\nRestart=on-failure\nRestartSec=10\nKillMode=control-group\nUMask=0077\nTimeoutStartSec=60\nTimeoutStopSec=25\n\n[Install]\nWantedBy=default.target\n'}
+  ];
+  for(const target of [
+    ...(c.runtime?.host?.enabled?[{kind:'host',name:null,unit:'agent-mcp-opencode-host.service'}]:[]),
+    ...(c.containers||[]).filter(x=>x.opencode?.enabled).map(x=>({kind:'container',name:x.name,unit:'agent-mcp-opencode-container-'+x.name+'.service'}))
+  ]){
+    services.push({unit:target.unit,body:'[Unit]\nDescription=Agent MCP OpenCode '+RUNTIME_VERSION+' '+target.kind+' '+(target.name||'')+'\nAfter=network-online.target\n\n'+common+'Type=simple\nExecStart='+node+' '+join(PROJECT_ROOT,'deploy/runtime-server.mjs')+' '+target.kind+(target.name?' '+target.name:'')+'\nRestart=on-failure\nRestartSec=5\nUMask=0077\nTimeoutStopSec=25\nKillMode=control-group\n\n[Install]\nWantedBy=default.target\n'});
+  }
+  for(const service of services){
+    const file=join(dir,service.unit);
+    await writeFile(file,service.body,{mode:0o644});
+    await exec('systemctl',['--user','link',file]);
+  }
+  await exec('systemctl',['--user','daemon-reload']);
+}
+async function prepareAll(c){const out=[];if(c.runtime?.host?.enabled)out.push(await prepareTarget(c,'host'));for(const t of c.containers||[])if(t.opencode?.enabled)out.push(await prepareTarget(c,'container',t.name));await installUnits(c);return out;}
+async function baseline(c){const clone=structuredClone(c);const clean=o=>{if(!o||typeof o!=='object')return;for(const[k,v]of Object.entries(o)){if(/^(token|api_key|apiKey|password|secret)$/i.test(k)&&typeof v==='string')o[k]='<SET_PRIVATE_VALUE>';else if(v&&typeof v==='object')clean(v);}};clean(clone);await writeFile(join(PROJECT_ROOT,'config/baseline.current.json'),JSON.stringify(clone,null,2)+'\n',{mode:0o600});return {baseline:'config/baseline.current.json',credentials_included:false};}
+async function installedWorkers(){const dir=join(PROJECT_ROOT,'deploy/systemd'),out=[];for(const name of await readdir(dir)){if(!/^agent-mcp-opencode-(host|container-[A-Za-z0-9_.-]+)\.service$/.test(name))continue;const text=await readFile(join(dir,name),'utf8');if(text.includes(PROJECT_ROOT+'/deploy/runtime-server.mjs'))out.push(name);}return out;}
+async function waitReady(c){const until=Date.now()+60000;let health;do{health=await runtimeHealth(c);if(health.every(x=>x.status==='ready'))return health;await new Promise(r=>setTimeout(r,300));}while(Date.now()<until);throw Error('BACKEND_READY_TIMEOUT_CHECK_LOGS')}
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+try{managementConfigPath();const originalConfig=await readFile(DEFAULT_CONFIG),c=await loadInstance(DEFAULT_CONFIG);
+ if(command==='status'){const r=await exec('systemctl',['--user','show',...new Set([...units(c),...await installedWorkers()]),'-p','Id','-p','ActiveState','-p','MainPID']);console.log(r.stdout);console.log(JSON.stringify({version:RUNTIME_VERSION,backends:await runtimeHealth(c)},null,2));}
+ else if(command==='check'){await exec(node,[join(PROJECT_ROOT,'deploy/project-config.mjs'),'check'],{env:{...process.env,AGENT_MCP_CONFIG:DEFAULT_CONFIG}}).then(r=>process.stdout.write(r.stdout));console.log(JSON.stringify({backends:await runtimeHealth(c)}));}
+ else if(command==='prepare')console.log(JSON.stringify(await prepareAll(c),null,2));
+ else if(command==='start'||command==='restart'){await prepareAll(c);const obsolete=(await installedWorkers()).filter(u=>!units(c).includes(u));if(obsolete.length)await exec('systemctl',['--user','disable','--now',...obsolete]);await exec('systemctl',['--user','enable',...units(c)]);await exec('systemctl',['--user',command==='start'?'start':'restart',...units(c)],{timeout:90000});console.log(JSON.stringify({operation:command,backends:await waitReady(c)}));}
+ else if(command==='stop'){await exec('systemctl',['--user','stop',...new Set([...units(c),...await installedWorkers()].reverse())],{timeout:90000});console.log('Stopped project services only.');}
+ else if(command==='logs'){const r=await exec('journalctl',['--user',...units(c).flatMap(u=>['-u',u]),'-n',String(Number(args[0])||40),'--no-pager']);process.stdout.write(r.stdout);}
+ else if(command==='baseline')console.log(JSON.stringify(await baseline(c)));
+ else if(command==='set'){const [path,value]=args;if(!path||!/^[A-Za-z0-9_.-]+$/.test(path)||/(token|api.?key|password|secret)/i.test(path))throw Error('ONLY_NON_SECRET_PARAMETER_PATH_ALLOWED');const parts=path.split('.');let obj=c;for(const k of parts.slice(0,-1)){if(!Object.hasOwn(obj,k)||!obj[k]||typeof obj[k]!=='object')throw Error('PARAMETER_PATH_NOT_FOUND');obj=obj[k];}const key=parts.at(-1);if(!Object.hasOwn(obj,key)||typeof obj[key]==='object')throw Error('SCALAR_PARAMETER_REQUIRED');let v;try{v=JSON.parse(value)}catch{v=value}if(v===undefined||v&&typeof v==='object')throw Error('SCALAR_PARAMETER_REQUIRED');if(typeof v!==typeof obj[key])throw Error('PARAMETER_TYPE_MISMATCH');obj[key]=v;await saveConfig(c,originalConfig);await loadInstance();console.log(JSON.stringify({parameter:path,updated:true,runtime_changed:false,next:'./agent-mcp restart'}));}
+ else if(command==='add-container'){const name=args[0],bp=args.indexOf('--binary'),pp=args.indexOf('--port');const next=await registerContainer(c,name,{binary:bp>=0?args[bp+1]:undefined,port:pp>=0?Number(args[pp+1]):undefined});await saveConfig(next,originalConfig);console.log(JSON.stringify({registered:name,version:RUNTIME_VERSION,port:next.containers.find(x=>x.name===name).opencode.port,next:'./agent-mcp restart',container_rebuilt:false}));}
+ else console.log('Usage: ./agent-mcp {status|check|prepare|start|restart|stop|logs [N]|baseline|set PATH VALUE|add-container NAME [--binary PATH] [--port N]}');
+}catch(e){console.error(/^[A-Z][A-Z0-9_]+$/.test(e.message)?e.message:'MANAGEMENT_OPERATION_FAILED');process.exitCode=1;}
+}

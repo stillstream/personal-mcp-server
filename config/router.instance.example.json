@@ -1,0 +1,45 @@
+{
+  "binary": "/absolute/private/haproxy",
+  "stats_socket": "/absolute/private/router.stats.sock",
+  "log_file": "/absolute/private/haproxy.log",
+  "models": [
+    {
+      "id": "Qwen3.8-27B-NVFP4-RTX5090",
+      "name": "qwen27b",
+      "listen_port": 18100,
+      "routes": [
+        {
+          "mode": "local",
+          "url": "http://127.0.0.1:18000"
+        },
+        {
+          "mode": "LAN",
+          "url": "http://<DISCOVERED_SERVER_LAN_IPV4>:18000"
+        },
+        {
+          "mode": "Tailscale",
+          "url": "http://<DISCOVERED_SERVER_TAILSCALE_IPV4>:18000"
+        }
+      ]
+    },
+    {
+      "id": "qwen3.8-flash-next-local",
+      "name": "flashnext",
+      "listen_port": 18181,
+      "routes": [
+        {
+          "mode": "local",
+          "url": "http://127.0.0.1:18081"
+        },
+        {
+          "mode": "LAN",
+          "url": "http://<DISCOVERED_SERVER_LAN_IPV4>:18081"
+        },
+        {
+          "mode": "Tailscale",
+          "url": "http://<DISCOVERED_SERVER_TAILSCALE_IPV4>:18081"
+        }
+      ]
+    }
+  ]
+}

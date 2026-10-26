@@ -1,0 +1,44 @@
+{
+  "status": "bounded-probes-not-production-activation-approval",
+  "opencode_version": "2.0.32",
+  "activation_preference": "preserve observed original versions; newer artifacts below remain candidates only",
+  "native_v2_component": "server1 controlled mem2.30 add plus clean Native restart old/new Session readonly list and fresh empty-session system injection PASS; no execute grant; not full plugin/Host deployment",
+  "billion_native_component": "server1 existing0.1.197 actual Native2.0.32 setup and acp_status no-proxy diagnostic PASS; bootstrap off, no old proxy; not compression/restore or production activation",
+  "owned_billion_proxy_component": "existing0.1.197 foreground lifecycle PASS with private HOME/XDG Node built-in SQLite exact epoch/group/watchdog proof and fenced stop; no Native attachment or compression/restore yet",
+  "native_owned_billion_integration": "server1 existing0.1.197 guarded Native2.0.32 routing/session headers and actual ACP status PASS with owned proxy; runtime override EACCES and epoch-bound cold-header adapter; not compression/restore/full profile",
+  "native_billion_compression_component": "original0.1.197 official nudge produced actual active b1 through Native2.0.32 on isolated synthetic history; one rejected string input then one successful array call; whole-chain test FAILED, search/decompress/restart/view not verified",
+  "billion_recovery_component": "same proxy data cold-restart active b1 and readonly backend search PASS; same Native Session/model/history metadata restart PASS; zero model/compress calls; not Native-plugin reconnection or decomp/full-chain proof",
+  "billion_live_recovery_component": "same Native Session/plugin reconnected actual search and folded bulk wire PASS; original large decompress produced verified private file only, not model-context restoration; full-chain FAILED, no native filesystem grants",
+  "billion_gateway_excerpt_retrieval": "same Native1930334 Session consumed original row via real L1 gateway_host_search, audit+model tool-result wire PASS; fixed hash single-artifact temporary alias, thirteen tools unchanged; not full-block reinflation/general production delivery",
+  "observed_on": ["server1 existing dlvins-dev", "lap1 existing dlvins-dev"],
+  "offline_component_proved_on": "server1 and lap1 existing containers; not Native V2 activation",
+  "memory_store_component": "both machines PASS private write/search/process-restart/delete/vector-deletion; no original DB opened",
+  "observed_original": [
+    {"name":"opencode-mem","version":"2.30.0","v2_entry":"dist/v2/plugin.js","v2_sdk":"@opencode/plugin ^2.0.24","offline_embedding_component":"PASS; not full V2 plugin activation"},
+    {"name":"billion-context","version":"0.1.197","v2_entry":"dist/agent/opencode-native.js","v2_setup_detected":true,"controlled_native_setup_no_proxy":"PASS","production_activated":false}
+  ],
+  "artifacts": [
+    {
+      "name": "opencode-mem",
+      "version": "2.32.0",
+      "url": "https://registry.npmjs.org/opencode-mem/-/opencode-mem-2.32.0.tgz",
+      "integrity": "sha512-78qK5IQTn9oN3YXF4S+/bas3c/HsgJNGkPaH0G2/Jbp7/Q8kyI5+upM58xxalUNb3JWk9Y3F1u3dRSChCEWwtQ==",
+      "v2_entry": "dist/v2/plugin.js",
+      "v2_sdk": "@opencode/plugin ^2.0.27",
+      "native_dependencies": [
+        "@tursodatabase/database ^0.8.3",
+        "onnxruntime-node 1.30.0",
+        "@huggingface/transformers ^4.3.1"
+      ]
+    },
+    {
+      "name": "billion-context",
+      "version": "0.1.202",
+      "url": "https://registry.npmjs.org/billion-context/-/billion-context-0.1.202.tgz",
+      "integrity": "sha512-vCouVcX40Qbo+RdO8vo8F+cV/cutbuoflBpLu0aFpZRxJtygSN743GGQET7jqRCLoT4KzqaQQqQOywjOaBDx0Q==",
+      "v2_entry": "dist/agent/opencode-native.js",
+      "native_dependencies": [],
+      "proxy": "owned external proxy or verified attach required under current Host exec guard"
+    }
+  ]
+}

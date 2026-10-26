@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "machine_id": "replace-with-machine-id",
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 18879
+  },
+  "existing_tunnel": {
+    "id": "",
+    "api_key": "",
+    "old_target": "http://127.0.0.1:8787/mcp"
+  },
+  "callers": [
+    {
+      "id": "chatgpt",
+      "level": "L1",
+      "token": "REPLACE_WITH_A_RANDOM_TOKEN_AT_LEAST_32_CHARACTERS"
+    },
+    {
+      "id": "dsh",
+      "level": "L1",
+      "token": "REPLACE_WITH_A_DIFFERENT_RANDOM_TOKEN_AT_LEAST_32_CHARACTERS"
+    }
+  ],
+  "host_read_roots": {},
+  "host_write_roots": {},
+  "containers": [],
+  "models": {
+    "host": {
+      "provider": {
+        "local": {
+          "npm": "@ai-sdk/openai-compatible",
+          "name": "Configure your endpoint and model ID",
+          "options": {
+            "baseURL": "http://127.0.0.1:18100/v1",
+            "apiKey": ""
+          },
+          "models": {
+            "REPLACE_WITH_MODEL_ID": {
+              "name": "Replace with exact server model ID",
+              "variants": {
+                "low": {
+                  "reasoningEffort": "low"
+                },
+                "medium": {
+                  "reasoningEffort": "medium"
+                }
+              }
+            }
+          }
+        }
+      },
+      "model": "local/REPLACE_WITH_MODEL_ID",
+      "small_model": "local/REPLACE_WITH_MODEL_ID"
+    },
+    "containers": {}
+  },
+  "advisor_mcp": {
+    "enabled": false,
+    "listen": {
+      "host": "127.0.0.1",
+      "port": 8787,
+      "path": "/mcp"
+    },
+    "gateway_caller": "chatgpt",
+    "roots": {},
+    "write_roots": [],
+    "file_operations": [
+      "list_files",
+      "read_file",
+      "file_info",
+      "search_files",
+      "search_text",
+      "git_summary"
+    ],
+    "gateway_tools": [
+      "gateway_status",
+      "opencode_status",
+      "opencode_diff"
+    ]
+  },
+  "tunnel_client": {
+    "enabled": false,
+    "binary": "../components/tunnel-client/runtime/tunnel-client-runtime-cloudflared",
+    "health_addr": "127.0.0.1:38433",
+    "target_url": "http://127.0.0.1:8787/mcp"
+  },
+  "agents": {
+    "state_file": "../.local/tasks.json",
+    "host_scopes_file": "../.local/host-scopes.json",
+    "host_backends": {},
+    "backends": {}
+  },
+  "opencode_host": {
+    "enabled": false
+  },
+  "audit": "../.local/audit.jsonl",
+  "permissions": {
+    "l1": "current",
+    "l2": "full"
+  },
+  "runtime": {
+    "version": "2.1.2",
+    "plugins": [],
+    "host": {
+      "enabled": false,
+      "binary": "/usr/local/bin/opencode",
+      "port": 4100,
+      "cwd": "/tmp"
+    }
+  }
+}

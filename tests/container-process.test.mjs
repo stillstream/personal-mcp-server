@@ -1,0 +1,3 @@
+import{test}from'node:test';import assert from'node:assert/strict';import{execFile}from'node:child_process';import{promisify}from'node:util';import{taskScript,signalScript}from'../src/container-process.mjs';const exec=promisify(execFile),marker='agent-mcp-00000000-0000-0000-0000-000000000000';
+test('task marker and signal inputs are server-owned and validated',()=>{assert.throws(()=>taskScript('../bad'));assert.throws(()=>signalScript(marker,'TERM; id'));assert(taskScript(marker).includes('fields[19]'));assert(signalScript(marker,'TERM').includes('fields[2]'));});
+test('PID/start-time/group-identity shell templates parse',async()=>{for(const s of [taskScript(marker),signalScript(marker,'TERM'),signalScript(marker,'KILL')])await exec('/bin/bash',['-n','-c',s]);});

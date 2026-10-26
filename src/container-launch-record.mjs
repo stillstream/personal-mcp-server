@@ -1,0 +1,4 @@
+import{lstat,writeFile,rename,unlink}from'node:fs/promises';import{randomUUID}from'node:crypto';
+// Called only after the parent's exclusive launch lock and old-PID absence check.
+// Cancellation tombstones are immutable: each new launch receives a new capability.
+export async function rotateContainerLaunch(file,record){const st=await lstat(file);if(!st.isFile()||st.isSymbolicLink()||st.nlink!==1||st.uid!==process.getuid()||(st.mode&0o077))throw Error('PRIVATE_BACKEND_RECORD_REQUIRED');const next={...record,server_marker:'agent-mcp-'+randomUUID()},temp=file+'.'+randomUUID()+'.launch.tmp';let created=false;try{await writeFile(temp,JSON.stringify(next,null,2)+String.fromCharCode(10),{mode:0o600,flag:'wx'});created=true;await rename(temp,file);return next;}finally{if(created)await unlink(temp).catch(()=>{});}}

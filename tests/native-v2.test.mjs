@@ -1,0 +1,3 @@
+import{test}from'node:test';import assert from'node:assert/strict';import{assertNativeRoute}from'../src/native-v2.mjs';
+test('native model route stays exact and preserves one legitimate local billion wrapper',()=>{const url='http://127.0.0.1:18100/v1';assert.deepEqual(assertNativeRoute(url,url),{wrapped:false});assert.deepEqual(assertNativeRoute(url,'http://127.0.0.1:18787/bili/'+url),{wrapped:true});});
+test('reject project model cross-routing remote wrapper and URL credentials',()=>{const url='http://127.0.0.1:18100/v1';for(const actual of ['http://127.0.0.1:18181/v1','http://external.test/bili/'+url,'http://user:secret@127.0.0.1:18100/v1',url+'?api_key=do-not-accept',url+'#fragment'])assert.throws(()=>assertNativeRoute(url,actual),/PROVIDER_ROUTE_CHANGED/);});

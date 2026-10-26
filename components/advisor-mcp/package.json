@@ -1,0 +1,17 @@
+{
+  "name": "agent-mcp-advisor",
+  "version": "1.3.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node test/smoke.mjs && node --test test/gateway-proxy.test.mjs test/config.test.mjs",
+    "test:lifecycle": "bash test/test-lifecycle.sh",
+    "doctor": "./doctor.sh"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}

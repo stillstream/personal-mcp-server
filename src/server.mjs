@@ -1,276 +1,64 @@
-import { createServer } from 'node:http'
-import { spawn } from 'node:child_process'
-import { randomUUID, timingSafeEqual } from 'node:crypto'
-import { readFile, stat, mkdir, writeFile, chmod } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { isAbsolute, resolve, join } from 'node:path'
-import { homedir } from 'node:os'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { z } from 'zod'
-
-const HOST = process.env.MCP_HOST || process.env.S100_MCP_HOST || '127.0.0.1'
-const PORT = Number(process.env.MCP_PORT || process.env.S100_MCP_PORT || 18878)
-const MCP_PATH = '/mcp'
-const TOKEN_FILE = process.env.MCP_TOKEN_FILE || process.env.S100_MCP_TOKEN_FILE || join(homedir(), '.local/share/opencode-mcp/runtime/access-token')
-const TOOL_PREFIX = process.env.MCP_TOOL_PREFIX || 's100'
-if (!/^[a-z][a-z0-9_]{0,31}$/.test(TOOL_PREFIX)) throw new Error('Invalid MCP_TOOL_PREFIX')
-const MAX_ACTIVE_TASKS = 32
-const MAX_RECORDED_TASKS = 128
-const MAX_CAPTURE_BYTES_PER_STREAM = 1024 * 1024
-const DEFAULT_RESPONSE_BYTES = 16 * 1024
-const MAX_RESPONSE_BYTES = 64 * 1024
-const TASK_TTL_MS = 2 * 60 * 60 * 1000
-const tasks = new Map()
-let stopping = false
-
-await mkdir(resolve(TOKEN_FILE, '..'), { recursive: true })
-
-async function ensureToken() {
-  if (!existsSync(TOKEN_FILE)) {
-    const token = randomUUID().replaceAll('-', '') + randomUUID().replaceAll('-', '')
-    await writeFile(TOKEN_FILE, `${token}\n`, { mode: 0o600, flag: 'wx' })
-  }
-  await chmod(TOKEN_FILE, 0o600)
-  const token = (await readFile(TOKEN_FILE, 'utf8')).trim()
-  if (token.length < 32) throw new Error('access token file must contain at least 32 characters')
-  return token
-}
-const ACCESS_TOKEN = await ensureToken()
-
-async function log(message) {
-  const line = `${new Date().toISOString()} ${message}`
-  console.error(line)
-}
-function response(value, isError = false) {
-  return { isError, content: [{ type: 'text', text: JSON.stringify(value) }] }
-}
-function running(task) { return task.exitCode === null && !task.closed }
-function activeCount() { return [...tasks.values()].filter(running).length }
-function groupExists(pid) {
-  try { process.kill(-pid, 0); return true } catch (error) { return error.code === 'EPERM' }
-}
-function signalGroup(task, signal) {
-  if (!Number.isInteger(task.pid) || task.pid <= 0) return false
-  try { process.kill(-task.pid, signal); return true } catch (error) {
-    if (error.code === 'ESRCH') return false
-    throw error
-  }
-}
-function capture(task, key, chunk) {
-  const bufferKey = `${key}Buffer`
-  const droppedKey = `${key}Dropped`
-  const old = task[bufferKey]
-  let next = Buffer.concat([old, chunk])
-  if (next.length > MAX_CAPTURE_BYTES_PER_STREAM) {
-    const drop = next.length - MAX_CAPTURE_BYTES_PER_STREAM
-    next = next.subarray(drop)
-    task[droppedKey] += drop
-  }
-  task[bufferKey] = next
-  task[`${key}Total`] += chunk.length
-}
-function takeOutput(task, maxBytes, advance = true) {
-  let truncated = false
-  const budgetPerStream = Math.floor(maxBytes / 2)
-  const read = (key, budget) => {
-    const buffer = task[`${key}Buffer`]
-    const total = task[`${key}Total`]
-    const base = total - buffer.length
-    let cursor = task[`${key}Cursor`]
-    if (cursor < base) { cursor = base; truncated = true }
-    const start = Math.max(0, cursor - base)
-    const data = buffer.subarray(start, Math.min(buffer.length, start + budget))
-    const more = start + data.length < buffer.length
-    if (more) truncated = true
-    if (advance) task[`${key}Cursor`] = cursor + data.length
-    return { text: data.toString('utf8'), more }
-  }
-  const stdout = read('stdout', budgetPerStream)
-  const stderr = read('stderr', budgetPerStream)
-  return { stdout: stdout.text, stderr: stderr.text, truncated, has_more: stdout.more || stderr.more }
-}
-function cleanOldTasks() {
-  const now = Date.now()
-  for (const [id, task] of tasks) {
-    if (!running(task) && task.closedAt && now - task.closedAt > TASK_TTL_MS) tasks.delete(id)
-  }
-  if (tasks.size < MAX_RECORDED_TASKS) return
-  for (const [id, task] of tasks) {
-    if (!running(task)) tasks.delete(id)
-    if (tasks.size < MAX_RECORDED_TASKS) break
-  }
-}
-function publicTask(task, maxBytes, advance = true) {
-  const output = takeOutput(task, maxBytes, advance)
-  const isRunning = running(task)
-  return {
-    status: isRunning ? 'running' : task.stopRequested ? 'stopped' : 'completed',
-    exit_code: task.exitCode,
-    stdout: output.stdout,
-    stderr: output.stderr,
-    truncated: output.truncated,
-    has_more: output.has_more,
-    ...(isRunning || output.has_more ? { task_id: task.id } : {}),
-  }
-}
-const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
-
-const toolDefinitions = []
-function registerTool(name, config, handler) {
-  toolDefinitions.push([name, config, handler])
-}
-
-registerTool(`${TOOL_PREFIX}_exec`, {
-  title: 'Execute remote host shell command',
-  description: 'Execute arbitrary shell commands as the Linux account running this MCP service (not necessarily root). Commands can read, write, or delete files anywhere that account is allowed to access; this service is NOT read-only and has no project-path whitelist. OpenCode CLI can also be invoked when installed. Provide an absolute existing cwd. Longer commands return a task_id for polling.',
-  inputSchema: {
-    command: z.string().min(1).max(100_000).describe('Arbitrary shell command/script/program invocation. May modify or delete data and system files.'),
-    cwd: z.string().min(1).refine(isAbsolute, 'cwd must be an absolute path').describe('Absolute existing directory on the host; there is no project-directory allowlist.'),
-    wait_ms: z.number().int().min(0).max(5000).default(1500).describe('Maximum time to wait before returning; 0–5000 milliseconds. Longer commands continue in the background.'),
-  },
-}, async ({ command, cwd, wait_ms = 1500 }) => {
-  if (stopping) return response({ status: 'error', message: 'service is shutting down' }, true)
-  cleanOldTasks()
-  if (activeCount() >= MAX_ACTIVE_TASKS) return response({ status: 'error', message: `active task limit reached (${MAX_ACTIVE_TASKS})` }, true)
-  const absoluteCwd = resolve(cwd)
-  let info
-  try { info = await stat(absoluteCwd) } catch { return response({ status: 'error', message: 'cwd does not exist or is not accessible' }, true) }
-  if (!info.isDirectory()) return response({ status: 'error', message: 'cwd must be an existing directory' }, true)
-  const id = randomUUID()
-  const task = {
-    id, pid: null, commandBytes: Buffer.byteLength(command), cwd: absoluteCwd,
-    stdoutBuffer: Buffer.alloc(0), stderrBuffer: Buffer.alloc(0),
-    stdoutTotal: 0, stderrTotal: 0, stdoutDropped: 0, stderrDropped: 0,
-    stdoutCursor: 0, stderrCursor: 0, exitCode: null, signal: null,
-    closed: false, closedAt: null, stopRequested: false,
-  }
-  tasks.set(id, task)
-  const child = spawn('/bin/bash', ['--noprofile', '--norc', '-c', command], {
-    cwd: absoluteCwd,
-    env: process.env,
-    detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  task.pid = child.pid
-  child.stdout.on('data', (chunk) => capture(task, 'stdout', chunk))
-  child.stderr.on('data', (chunk) => capture(task, 'stderr', chunk))
-  task.closedPromise = new Promise((resolveClose) => {
-    child.once('error', (error) => {
-      task.spawnError = error.message
-      task.exitCode = 127
-      task.closed = true
-      task.closedAt = Date.now()
-      resolveClose()
-    })
-    child.once('close', (code, signal) => {
-      if (!task.closed) {
-        task.exitCode = Number.isInteger(code) ? code : 128 + (signal ? ({ SIGTERM: 15, SIGKILL: 9, SIGINT: 2 }[signal] || 0) : 0)
-        task.signal = signal || null
-        task.closed = true
-        task.closedAt = Date.now()
-      }
-      resolveClose()
-    })
-  })
-  await log(`task_started id=${id} uid=${process.getuid?.() ?? 'unknown'} cwd=${absoluteCwd} command_bytes=${task.commandBytes}`)
-  if (wait_ms > 0) await Promise.race([task.closedPromise, delay(wait_ms)])
-  const result = publicTask(task, DEFAULT_RESPONSE_BYTES)
-  if (task.spawnError) result.stderr = `${result.stderr}${result.stderr ? '\n' : ''}spawn error: ${task.spawnError}`
-  if (!running(task)) await log(`task_finished id=${id} exit_code=${task.exitCode}`)
-  return response(result)
-})
-
-registerTool(`${TOOL_PREFIX}_poll`, {
-  title: 'Poll remote host command task',
-  description: `Return newly captured stdout/stderr and current state for a task started by ${TOOL_PREFIX}_exec on this service. Each poll advances that task’s output cursor. A response is capped at max_output_bytes total; truncated=true means earlier retained output was dropped or more output remains for a later poll. Completed task records are in-memory only and expire after two hours.`,
-  inputSchema: {
-    task_id: z.string().uuid().describe(`Task ID returned by ${TOOL_PREFIX}_exec.`),
-    max_output_bytes: z.number().int().min(1024).max(MAX_RESPONSE_BYTES).default(DEFAULT_RESPONSE_BYTES).describe('Maximum combined stdout and stderr bytes in this response, from 1024 through 65536.'),
-  },
-}, async ({ task_id, max_output_bytes = DEFAULT_RESPONSE_BYTES }) => {
-  const task = tasks.get(task_id)
-  if (!task) return response({ status: 'not_found', task_id, message: 'unknown, expired, or service-restarted task id' }, true)
-  const result = publicTask(task, max_output_bytes)
-  if (task.spawnError && result.stderr) result.stderr += `\nspawn error: ${task.spawnError}`
-  return response({ task_id, ...result })
-})
-
-registerTool(`${TOOL_PREFIX}_stop`, {
-  title: 'Stop remote host command task',
-  description: 'Stop only the process group created by this MCP service for the supplied task_id. Sends SIGTERM, then SIGKILL after a short grace period if that same process group remains. It does not search for or kill unrelated host processes. This is a state-changing operation.',
-  inputSchema: {
-    task_id: z.string().uuid().describe(`Task ID returned by ${TOOL_PREFIX}_exec; only service-owned tasks can be stopped.`),
-  },
-}, async ({ task_id }) => {
-  const task = tasks.get(task_id)
-  if (!task) return response({ status: 'not_found', task_id, message: 'unknown, expired, or service-restarted task id' }, true)
-  if (!running(task)) return response({ status: task.stopRequested ? 'stopped' : 'completed', task_id, exit_code: task.exitCode, message: 'task is not running' })
-  task.stopRequested = true
-  await log(`task_stop_requested id=${task.id}`)
-  try { signalGroup(task, 'SIGTERM') } catch (error) { return response({ status: 'error', task_id, message: `failed to signal owned process group: ${error.message}` }, true) }
-  await Promise.race([task.closedPromise, delay(1500)])
-  // The shell leader may exit while descendants still occupy its isolated process group.
-  if (groupExists(task.pid)) {
-    try { signalGroup(task, 'SIGKILL') } catch {}
-    await Promise.race([task.closedPromise, delay(1500)])
-  }
-  const result = publicTask(task, DEFAULT_RESPONSE_BYTES)
-  if (running(task)) result.message = 'termination requested; process group has not closed yet'
-  await log(`task_stop_finished id=${task.id} status=${result.status} exit_code=${task.exitCode}`)
-  return response({ task_id, ...result })
-})
-
-const tokenEqual = (request) => {
-  const header = request.headers.authorization || ''
-  const provided = Buffer.from(header.startsWith('Bearer ') ? header.slice(7) : '')
-  const expected = Buffer.from(ACCESS_TOKEN)
-  return provided.length === expected.length && timingSafeEqual(provided, expected)
-}
-
-const httpServer = createServer(async (request, res) => {
-  const path = request.url?.split('?')[0]
-  if (request.method === 'GET' && path === '/healthz') {
-    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, service: 'personal-mcp-server', uid: process.getuid?.() ?? null }))
-    return
-  }
-  if (path !== MCP_PATH) { res.writeHead(404).end('not found'); return }
-  if (!tokenEqual(request)) { res.writeHead(401, { 'www-authenticate': 'Bearer' }).end('unauthorized'); return }
-  if (!['POST', 'GET', 'DELETE'].includes(request.method || '')) { res.writeHead(405).end('method not allowed'); return }
-  const requestServer = new McpServer({ name: 'personal-mcp-server', version: '0.1.0' }, { capabilities: { tools: {} } })
-  // Tools are registered once per transport instance; handlers close over the process-wide task table.
-  for (const [name, config, handler] of toolDefinitions) requestServer.registerTool(name, config, handler)
-  const transport = new StreamableHTTPServerTransport({})
-  res.on('close', () => { void transport.close(); void requestServer.close() })
-  try {
-    await requestServer.connect(transport)
-    await transport.handleRequest(request, res)
-  } catch (error) {
-    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' })
-    if (!res.writableEnded) res.end('MCP request failed')
-    await log(`mcp_request_error ${error?.name || 'Error'}`)
-  }
-})
-
-httpServer.on('clientError', (_error, socket) => socket.end('HTTP/1.1 400 Bad Request\r\n\r\n'))
-httpServer.listen(PORT, HOST, () => {
-  void log(`service_ready host=${HOST} port=${PORT} uid=${process.getuid?.() ?? 'unknown'} gid=${process.getgid?.() ?? 'unknown'} tools=${TOOL_PREFIX}_exec,${TOOL_PREFIX}_poll,${TOOL_PREFIX}_stop`)
-})
-
-async function shutdown(signal) {
-  if (stopping) return
-  stopping = true
-  await log(`service_shutdown signal=${signal} active_tasks=${activeCount()}`)
-  for (const task of tasks.values()) {
-    if (running(task)) {
-      task.stopRequested = true
-      try { signalGroup(task, 'SIGTERM') } catch {}
-    }
-  }
-  await Promise.race([Promise.all([...tasks.values()].filter(running).map((task) => task.closedPromise)), delay(2000)])
-  for (const task of tasks.values()) if (task.pid && groupExists(task.pid)) { try { signalGroup(task, 'SIGKILL') } catch {} }
-  httpServer.close(() => process.exit(0))
-  setTimeout(() => process.exit(0), 3000).unref()
-}
-process.on('SIGTERM', () => void shutdown('SIGTERM'))
-process.on('SIGINT', () => void shutdown('SIGINT'))
+import {createServer} from 'node:http';
+import {readFile,stat,appendFile,mkdir} from 'node:fs/promises';
+import {dirname,isAbsolute} from 'node:path';
+import {timingSafeEqual,randomUUID} from 'node:crypto';
+import {Server} from '@modelcontextprotocol/sdk/server/index.js';
+import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import {ListToolsRequestSchema,CallToolRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+import {z} from 'zod';
+import {identity,hostFile,diagnostic,Containers} from './core.mjs';
+import {hostGit} from './host-git.mjs';
+import {HostScopes} from './host-scopes.mjs';
+import {validateConfigBoundary,validateContainerBoundaries} from './config-policy.mjs';
+import {fileURLToPath} from 'node:url';
+import {loadInstance,readSecret} from './instance-config.mjs';
+import {fullL2} from './full-access.mjs';
+import {hostJobDefinitions,hostJobCall} from './host-jobs.mjs';
+import {runtimeHealth} from './runtime-client.mjs';
+const path=process.env.AGENT_MCP_CONFIG||fileURLToPath(new URL('../config/instance.local.json',import.meta.url));
+const config=await loadInstance(path);
+const protectedPaths=await validateConfigBoundary(config,path,fileURLToPath(new URL('..',import.meta.url)));
+Object.defineProperty(config,'__protected_paths',{value:protectedPaths});
+if(config.permissions?.l2!=='full')await validateContainerBoundaries(config,protectedPaths);
+if(!['127.0.0.1','::1'].includes(config.listen?.host))throw Error('LOOPBACK_REQUIRED');
+for(const roots of [config.host_read_roots,config.host_write_roots])for(const p of Object.values(roots||{}))if(!isAbsolute(p))throw Error('ABSOLUTE_ROOT_REQUIRED');
+const callers=[];
+for(const c of config.callers||[]){if(!['L1','L2'].includes(c.level)||!c.id)throw Error('INVALID_POLICY');if(c.token_file){const s=await stat(c.token_file);if((s.mode&0o077)!==0||s.uid!==process.getuid())throw Error('PRIVATE_TOKEN_REQUIRED');}const token=await readSecret(c,'token','token_file');if(token.length<32)throw Error('TOKEN_TOO_SHORT');if(callers.some(x=>x.token===token||x.id===c.id))throw Error('DUPLICATE_CALLER');callers.push({...c,token});}
+if(!callers.length)throw Error('CALLERS_REQUIRED');
+await mkdir(dirname(config.audit),{recursive:true,mode:0o700});
+const containers=new Containers(config,protectedPaths);if(config.agents?.host_scopes_file){const scopes=await new HostScopes(config.agents.host_scopes_file).load();Object.defineProperty(config,'__host_scopes',{value:scopes});Object.defineProperty(config,'__stop_host_children',{value:async(task,owner)=>{await scopes.revoke(task,owner);const children=await scopes.children(task,owner),out=[];for(const child of children){try{out.push(await containers.stopBound(child,task,owner));}catch(e){out.push({task_id:child.id,stop_requested:false,code:e.message});}}return out;}});}const registry=new Map();
+const add=(name,description,schema,fn)=>registry.set(name,{name,description,inputSchema:z.toJSONSchema(schema),schema,fn});
+if(config.permissions?.l2==='full')for(const d of hostJobDefinitions)add(d.name,d.description,d.schema,(caller,a)=>hostJobCall(config,caller,d.name,a));
+add('gateway_status','Machine identity, permission baseline and actual OpenCode backend health; no secrets.',z.object({}),async()=>{const backends=config.runtime?.version==='2.1.2'?await runtimeHealth(config):[];return{...identity(),machine_id:config.machine_id,permission_levels:['L1','L2'],l2_mode:config.permissions?.l2==='full'?'full-os-user':'legacy-scoped',host_read_roots:config.host_read_roots,host_write_roots:config.host_write_roots,host_opencode:config.runtime?.host?.enabled?(backends.find(b=>b.target==='host')?.status||'unavailable'):config.opencode_host?.enabled?'configured-not-verified':'disabled',containers:(config.containers||[]).map(c=>c.name),opencode_backends:config.runtime?.version==='2.1.2'?backends:Object.keys(config.agents?.backends||{}),native_session_state:config.runtime?.version==='2.1.2'?'native-2.1.2':config.agents?.state_file?'configured':'disabled'}});
+add('host_file','L1 reads/info/list; L2 mutations only within named configured roots. Symlinks and hardlinked files rejected. Delete only a file or empty directory; rename only a regular single-link file within the same root, never overwrite.',z.object({action:z.enum(['list','read','info','write','edit','mkdir','delete','rename']),root:z.string(),path:z.string().default('.'),destination:z.string().optional(),text:z.string().max(1048576).optional(),old_string:z.string().optional(),new_string:z.string().optional()}), (c,a)=>hostFile(config,c,a));
+add('host_search','Bounded filename glob or literal text search within a named read root; no symlink traversal, no regex execution, hidden files excluded by default.',z.object({mode:z.enum(['files','text']),root:z.string(),path:z.string().default('.'),query:z.string().min(1).max(256).optional(),pattern:z.string().max(256).default('*'),include_hidden:z.boolean().default(false),max_results:z.number().int().min(1).max(100).default(50)}),(c,a)=>hostFile(config,c,{...a,action:a.mode==='files'?'search_files':'search_text'}));
+add('host_diagnostic','Fixed low-risk diagnostic templates; never arbitrary shell.',z.object({command:z.enum(['identity','disk','memory','uptime','git_summary']),root:z.string().max(128).optional(),path:z.string().max(4096).optional()}),(caller,a)=>a.command==='git_summary'?hostGit(config,caller,a):diagnostic(caller,a));
+add('container_list','Only registered containers and their real writable mounts.',z.object({}),()=>containers.list());
+add('container_exec','L2 arbitrary shell in a registered container, including default root; writable host mounts are affected. Never arbitrary Docker control.',z.object({container:z.string(),command:z.string().min(1).max(65536),cwd:z.string(),wait_ms:z.number().int().min(0).max(2000).optional()}),(c,a)=>containers.start(c,a));
+add('container_poll','Read newly captured output only for caller-owned tasks.',z.object({task_id:z.string()}),(c,a)=>containers.poll(c,a));
+add('container_stop','Stop the recorded container task process group.',z.object({task_id:z.string()}),(c,a)=>containers.stop(c,a));
+// Optional adapters remain absent until implemented; never silently substitute another backend.
+try{const {agentTools,agentCall}=await import('./agents.mjs');if(!Array.isArray(agentTools)||typeof agentCall!=='function')throw Error('AGENT_CONTRACT_INVALID');for(const t of agentTools){if(registry.has(t.name))throw Error('DUPLICATE_TOOL');const schema=config.runtime?.version==='2.1.2'&&t.name==='opencode_start'?t.schema.extend({target:z.enum(['host','container'])}):t.schema;registry.set(t.name,{...t,schema,inputSchema:z.toJSONSchema(schema),fn:(c,a)=>agentCall(config,c,t.name,a)});}}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND'||e.url!==new URL('./agents.mjs',import.meta.url).href)throw e;}
+for(const c of callers)if(c.allowed_tools!==undefined&&(!Array.isArray(c.allowed_tools)||c.allowed_tools.some(n=>typeof n!=='string'||!registry.has(n))||new Set(c.allowed_tools).size!==c.allowed_tools.length))throw Error('INVALID_TOOL_SCOPE');
+function authorize(req){const b=Buffer.from(req.headers.authorization||'');return callers.find(c=>{const a=Buffer.from('Bearer '+c.token);return a.length===b.length&&timingSafeEqual(a,b);});}
+const http=createServer(async(req,res)=>{
+ if(req.url==='/healthz'&&req.method==='GET'){res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({ok:true,machine_id:config.machine_id}));return;}
+ if(req.url!=='/mcp'){res.writeHead(404).end();return;}
+ const caller=authorize(req)||config.__host_scopes?.authenticate(req.headers.authorization);if(!caller){res.writeHead(401,{'www-authenticate':'Bearer'}).end();return;}
+ if(req.method!=='POST'){res.writeHead(405).end();return;}
+ if(req.headers.origin&&!['http://127.0.0.1','http://localhost'].includes(req.headers.origin)){res.writeHead(403).end();return;}
+ const server=new Server({name:'agent-mcp',version:'1.3.0'},{capabilities:{tools:{}}});
+ server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[...registry.values()].map(({name,description,inputSchema})=>({name,description,inputSchema}))}));
+ server.setRequestHandler(CallToolRequestSchema,async r=>{
+  const request_id=randomUUID(),start=Date.now();let ok=false;
+  try{const t=registry.get(r.params.name);if(!t)throw Error('TOOL_DENIED');if(!fullL2(config,caller)&&caller.allowed_tools&&!caller.allowed_tools.includes(t.name))throw Error('TOOL_SCOPE_DENIED');const args=t.schema?t.schema.strict().parse(r.params.arguments||{}):(r.params.arguments||{});const result=await t.fn(caller,args);ok=true;return {content:[{type:'text',text:JSON.stringify({ok:true,request_id,result})}]};}
+  catch(e){return {isError:true,content:[{type:'text',text:JSON.stringify({ok:false,request_id,code:/^[A-Z][A-Z0-9_]+$/.test(e.message)?e.message:'OPERATION_FAILED'})}]};}
+  finally{await appendFile(config.audit,JSON.stringify({time:new Date().toISOString(),request_id,caller:caller.id,level:caller.level,tool:r.params.name,ok,duration_ms:Date.now()-start})+'\n',{mode:0o600});}
+ });
+ const transport=new StreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
+ res.on('close',()=>{void transport.close();void server.close();});
+ try{await server.connect(transport);await transport.handleRequest(req,res);}catch{if(!res.headersSent)res.writeHead(500);if(!res.writableEnded)res.end();}
+});
+http.requestTimeout=30000;http.maxHeadersCount=64;
+http.listen(config.listen.port,config.listen.host,()=>console.error('agent-mcp listening '+config.listen.host+':'+config.listen.port));
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>http.close(()=>process.exit(0)));

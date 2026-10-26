@@ -1,29 +1,13 @@
-# Credentials and local runtime state
-runtime/
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-*.log
-*.jsonl
-# Generated outputs and installed dependencies
 node_modules/
-backups/
-v2-staging/
-v2-validation/
-*.db
-*.db-shm
-*.db-wal
-acceptance.json
-independent-verification.json
-verification.json
-*smoke.json
-*.pyc
 __pycache__/
+.local/
+*.log
+.env
+config/instance.local.json
+config/*.local.json
+config/opencode.json
+components/tunnel-client/runtime/
 
-# Machine-local deployment configuration and downloaded binaries
-deploy.env
-.personal-mcp-managed
-opt/
-bin/tunnel-client-v*
+# generated for each machine
+deploy/systemd/
+config/baseline.current.json

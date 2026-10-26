@@ -1,0 +1,24 @@
+#!/usr/bin/env node
+import{readFile,writeFile,mkdir,mkdtemp,lstat}from'node:fs/promises';import{join,isAbsolute,resolve}from'node:path';import{homedir}from'node:os';import{randomBytes,randomUUID,createHash}from'node:crypto';import net from'node:net';import{mergeProviders,mergeInstanceModels}from'./merge-opencode.mjs';import{loadInstance}from'../src/instance-config.mjs';import{fileURLToPath}from'node:url';import{HOST_GATEWAY_TOOLS}from'../src/host-runtime.mjs';
+export async function prepareHost({artifact,snapshot,gateway,gatewayFile,frontend,guardFile,routes,base=fileURLToPath(new URL('../.local/host-backends',import.meta.url))}){
+ if(artifact.version!=='2.0.32'||!isAbsolute(artifact.host_binary||'')||!isAbsolute(guardFile||'')||!isAbsolute(gatewayFile||'')||!isAbsolute(base))throw Error('PINNED_PRIVATE_HOST_ARTIFACT_REQUIRED');
+ const actor=(gateway.callers||[]).find(c=>c.id===frontend);if(actor?.level!=='L2')throw Error('HOST_FRONTEND_L2_REQUIRED');if(!isAbsolute(gateway.agents?.host_scopes_file||''))throw Error('HOST_TASK_SCOPES_REQUIRED');if(!['127.0.0.1','::1'].includes(gateway.listen?.host)||(!Number.isInteger(gateway.listen.port)||gateway.listen.port<1||gateway.listen.port>65535))throw Error('PRIVATE_GATEWAY_REQUIRED');
+ for(const file of[artifact.host_binary,guardFile]){const s=await lstat(file);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o022))throw Error('HOST_BINARY_UNTRUSTED');}
+ for(const url of Object.values(gateway.models?{}:routes||{})){const u=new URL(url);if(u.protocol!=='http:'||!['127.0.0.1','localhost','[::1]'].includes(u.hostname)||u.username||u.password||u.search||u.hash)throw Error('PRIVATE_ROUTER_REQUIRED');}
+ const original=JSON.parse(snapshot),cfg=gateway.models?await mergeInstanceModels(original,gateway,'host'):mergeProviders(original,routes),plugins=cfg.plugin||[],permissions=[{action:'*',resource:'*',effect:'deny'},...HOST_GATEWAY_TOOLS.map(t=>({action:'gateway_'+t,resource:'*',effect:'allow'}))];delete cfg.permission;cfg.permissions=permissions;cfg.agents={...cfg.agents,build:{...cfg.agents?.build,permissions}};cfg.plugin=[];cfg.mcp={servers:{}};cfg.update='disable';delete cfg.autoupdate;
+ await mkdir(base,{recursive:true,mode:0o700});const root=await mkdtemp(join(base,'host-'));for(const dir of['home','data','state','cache','tmp','workspace','config/opencode'])await mkdir(join(root,dir),{recursive:true,mode:0o700});
+ await writeFile(join(root,'original.jsonc'),snapshot,{mode:0o600,flag:'wx'});await writeFile(join(root,'config/opencode/opencode.json'),JSON.stringify(cfg),{mode:0o600,flag:'wx'});await writeFile(join(root,'config/opencode/service.json'),JSON.stringify({password:randomBytes(32).toString('base64url')}),{mode:0o600,flag:'wx'});
+ const s=net.createServer();await new Promise((ok,fail)=>{s.once('error',fail);s.listen(0,'127.0.0.1',ok);});const port=s.address().port;await new Promise(ok=>s.close(ok));
+ const allowed_models=[];for(const[providerID,p]of Object.entries(cfg.provider||{}))for(const[modelID,m]of Object.entries(p.models||{}))allowed_models.push({providerID,modelID,variants:Object.keys(m.variants||{}),router_url:p.options?.baseURL});
+ const b={target:'host',api_major:2,version:'2.0.32',backend_id:randomUUID(),frontend_caller_id:frontend,root,binary:artifact.host_binary,guard_file:guardFile,proof_file:join(root,'host-proof.json'),connection_file:join(root,'connection.private.json'),registration_file:join(root,'state/opencode/service.json'),gateway_config_file:gatewayFile,gateway_url:'http://'+(gateway.listen.host==='::1'?'[::1]':'127.0.0.1')+':'+gateway.listen.port+'/mcp',url:'http://127.0.0.1:'+port,default_model:cfg.model,small_model:cfg.small_model,allowed_models,bootstrap_only:true,original_plugins:plugins,plugin_migration:'pending: bootstrap-only; no plugin parity claim',original_sha256:createHash('sha256').update(snapshot).digest('hex')};const file=join(root,'backend.json');await writeFile(file,JSON.stringify(b,null,2),{mode:0o600,flag:'wx'});return{backend_file:file,backend:b,server_started:false};
+}
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+ try {
+  const[a,s,g,frontend,guardFile,r]=process.argv.slice(2);
+  if(!r)throw Error('ARTIFACT_SNAPSHOT_INSTANCE_FRONTEND_GUARD_ROUTES_MARKER_REQUIRED');
+  const gateway=await loadInstance(g);
+  if(!gateway.models?.host)throw Error('MODEL_PROFILE_REQUIRED');
+  const x=await prepareHost({artifact:JSON.parse(await readFile(a,'utf8')),snapshot:s==='-'?'{}':await readFile(s,'utf8'),gateway,gatewayFile:resolve(g),frontend,guardFile:resolve(guardFile)});
+  console.log(JSON.stringify({backend_file:x.backend_file,url:x.backend.url,frontend,bootstrap_only:true,shared_callback_key:false,server_started:false}));
+ }catch(e){console.error(/^[A-Z][A-Z0-9_]+$/.test(e.message)?e.message:'HOST_PREPARATION_FAILED');process.exitCode=1;}
+}

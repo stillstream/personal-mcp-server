@@ -1,202 +1,154 @@
-# Personal MCP Server
+# Personal MCP Server — AMD64 版本
 
-基于 RDK S100 已运行版本整理的**跨设备 MCP 远程执行服务**。同一仓库支持本机 Shell MCP、OpenCode v2 CLI/Server 和 OpenAI ChatGPT Tunnel Client；新设备通过安装脚本部署，不需要复制原设备的程序路径和二进制包。
+本分支（`amd64`）提供面向 **Linux x86_64 / AMD64** 的个人 MCP Gateway：以同一服务入口管理宿主机及多个已存在 Docker 容器中的 OpenCode Server，并可通过 Advisor MCP 与 OpenAI Secure Tunnel 接入 ChatGPT。
 
-> 当前实现是 **Trusted（可信执行）模式**：MCP 可以以服务账号权限执行任意 Shell 命令，不是只读接口，也没有项目路径白名单。**Restricted（受限执行）尚未实现**。仓库不会自动更新正在运行的 S100 旧服务。
+**分支定位：** `main` 保存原嵌入式设备版本；`amd64` 保存本实现。两条分支独立维护，切换分支不会迁移机器上的服务或凭据。本 README 说明通用部署，不记录具体个人设备、账号、容器、模型或密钥。
 
-## 1. 组成与能力
+## 1. 系统组成
 
 ```text
-ChatGPT / 其他 MCP Client
-           │
-           ├── ChatGPT Secure Tunnel（可选；每台设备独立注册）
-           │
-           └── LAN / VPN MCP（可选）
-                    │
-                    ▼
-          Personal MCP Server
-        exec / poll / stop（Bearer Token）
-                    │
-                    ├── 本机 Shell、文件与系统工具
-                    └── OpenCode v2 CLI（可选）
-                          └── OpenCode v2 HTTP Server（可选，本机 4096）
+ChatGPT / MCP Client
+    │（可选：OpenAI Secure Tunnel）
+    ▼
+Advisor MCP                  ← 文件/Git工具、Gateway代理工具
+    │
+    ▼
+Agent MCP Gateway            ← Caller L1/L2、任务和权限路由
+    ├── Host 原生 Shell + OpenCode Server
+    └── Docker 容器 A / B / ... 原生 Shell + 各自 OpenCode Server
+                     └── 用户配置的模型 API（vLLM / llama.cpp / 等）
 ```
 
-| 组件 | 实现 | 默认值 |
+| 组件 | 作用 | 默认监听 |
 | --- | --- | --- |
-| Shell MCP | `src/server.mjs`、`bin/run-mcp.sh` | `127.0.0.1:18878/mcp` |
-| MCP LAN | 独立 systemd 用户服务（可选） | `0.0.0.0:18879/mcp` |
-| OpenCode CLI | 复用本机 v2；缺失时安装官方 `@opencode/cli` | v2.0.32 |
-| OpenCode Server | `bin/start-opencode-server.sh` | `127.0.0.1:4096` |
-| Tunnel Client | 从 OpenAI 官方发行版按平台下载并校验 SHA-256 | v0.0.14 |
-| systemd | `personal-*.service` 四个用户级服务 | 按需启用 |
+| Gateway | MCP 任务、身份与目标路由 | `127.0.0.1:18879/mcp` |
+| Advisor MCP | 向 ChatGPT 暴露文件、Git 和 Gateway 工具 | `127.0.0.1:8787/mcp` |
+| OpenCode Host | 宿主机原生 OpenCode 2.1.2 后台实例 | `127.0.0.1:4100` |
+| OpenCode Container | 每个已登记容器独立的 OpenCode 2.1.2 实例 | `4101` 起，逐个分配 |
+| Secure Tunnel | 将 Advisor MCP 接入 ChatGPT；可选 | 健康检查端口示例 `38433` |
 
-MCP 工具名默认为 `s100_exec`、`s100_poll`、`s100_stop`，保留 S100 原插件接口；在新设备可以设置 `MCP_TOOL_PREFIX=lap1` 等，变为 `lap1_exec/poll/stop`。**修改前缀后必须重新发现/同步 MCP 工具**。
+**模型推理服务不属于本仓库**：项目仅配置 OpenAI-compatible Provider 的地址、模型 ID 和认证信息，不负责部署模型或启动 GPU 推理容器。**Docker 容器也不由本项目创建**；仅对已有容器登记、启动/停止其 OpenCode 管理进程。
 
-OpenCode 在同一主机上应优先使用自身原生的 Bash/文件工具，不必将本机 Shell MCP 再配置为 OpenCode 的外部工具。
+## 2. 运行环境与依赖
 
-## 2. 首次部署：新 Linux 设备
+| 项目 | 需求 |
+| --- | --- |
+| 操作系统 | Linux x86_64 / AMD64；推荐 Ubuntu 22.04/24.04 |
+| Node.js | **>= 22.19**，并在 `PATH` 中可执行 `node`、`npm` |
+| OpenCode | **2.1.2**（宿主机必备；启用容器时容器内须可运行同版本二进制） |
+| 常用工具 | `bash`、`python3`、`setsid`、`git`、`curl` |
+| Docker（可选） | 安装 Docker CLI/daemon；服务用户能执行 `docker inspect/exec/cp` |
+| 容器内依赖 | `python3`、`bash`、`setsid`、与 OpenCode 2.1.2 兼容的系统库 |
+| 常驻服务 | `systemd --user`；允许用户服务运行 |
+| 模型 | 至少一个从执行目标可达的兼容 API 地址；模型名称以服务端实际 ID 为准 |
+| Tunnel（可选） | 已注册的 Tunnel ID、凭据，以及适用于 AMD64 的官方 Tunnel Client 运行时 |
 
-适用：Ubuntu/Linux `x86_64` 和 `aarch64`。需要 `bash`、`python3`、`curl`、`git`、`tar`、`sha256sum`、`xz` 和可用的网络；如需常驻，需要 systemd 用户服务。**不需要 sudo 安装 Node/OpenCode/Tunnel**：脚本优先复用系统现有 Node.js ≥22.19，不满足时下载并校验官方 Node.js 22.19.0；OpenCode v2 和 Tunnel 也安装到用户目录。
+当前版本主要在 Ubuntu x86_64 上验证；**不宣称 macOS、Windows 或 ARM64 兼容**。如模型 API 配置为 `127.0.0.1`，桥接网络容器不能直接使用宿主机回环地址；Host 网络容器通常可以。
 
-私有仓库必须先确保目标机器有 GitHub 克隆权限（SSH 密钥或 GitHub 认证）。
+## 3. 从 GitHub 部署
 
 ```bash
-git clone git@github.com:stillstream/personal-mcp-server.git
+git clone -b amd64 git@github.com:stillstream/personal-mcp-server.git
 cd personal-mcp-server
 
-# 默认仅部署 Shell MCP
-bash scripts/install.sh
+# 检查环境
+node --version
+npm --version
+opencode --version                # 要求 OpenCode 2.1.2
 
-# 常见个人开发机：Shell MCP + OpenCode v2 CLI/Server
-bash scripts/install.sh --with-opencode
+# 安装项目 Node 依赖
+npm ci
 
-# 仅需要 OpenCode CLI，而不启动 HTTP Server
-bash scripts/install.sh --with-cli
+# 初始化当前设备的私有配置（首次执行）
+node deploy/project-config.mjs init
 ```
 
-安装脚本可重复执行，第一次自动生成 MCP Token、本机配置和（启用 OpenCode Server 时）OpenCode 密码。**不会覆盖已有本机配置或模型 Provider 配置**。
+私有实例路径：`config/instance.local.json`（仅本机存放，权限应为 0600，已加入 .gitignore）。模板见 `config/instance.example.json`。请根据当前设备逐项填写：
 
-| 路径 | 用途 |
-| --- | --- |
-| `~/.local/share/opencode-mcp/` | 实际运行的 MCP 源码、Node 依赖、CLI、Tunnel 程序 |
-| `~/.local/share/opencode-mcp/runtime/` | MCP Token、OpenCode 密码、Tunnel API Key 等（不进入 Git） |
-| `~/.config/personal-mcp-server/deploy.env` | 每台设备独立配置；安装时从模板生成 |
-| `~/.config/systemd/user/personal-*.service` | systemd 用户服务 |
-| `~/.config/opencode/` | OpenCode 自己的 Provider/模型配置，安装器不改动 |
+1. `machine_id`：当前机器唯一标识；`callers`：调用方、L1/L2 权限与 Token。
+2. `runtime.host.enabled/binary/port/cwd`：是否启用宿主 OpenCode、**实际 2.1.2 二进制绝对路径**、唯一端口、绝对工作目录。
+3. `models.host`：Provider 的 `baseURL`、`apiKey`、模型 ID、默认模型及小模型；端点必须从宿主机可达。
+4. `advisor_mcp`：是否启用、文件根、向 ChatGPT 暴露的 `file_operations` 和 `gateway_tools`。
+5. `tunnel_client` 与 `existing_tunnel`：只有启用 ChatGPT Tunnel 时才设置二进制路径、Tunnel ID 和私有 API Key。
+6. 如需容器，先保持 `containers: []`、`models.containers: {}`，再按第 5 节登记。
 
-### 完整部署：同时启用 Tunnel Client
+`project-config.mjs init` **只创建配置草稿**，不会自动安装 OpenCode、创建 Docker 容器、注册 Tunnel 或启动服务；模板内的 `REPLACE_WITH_...` 值必须替换。
 
-Tunnel 连接需要**目标设备对应的 Tunnel ID 和控制平面 API Key**。这些值由 ChatGPT / OpenAI 的 Tunnel 注册流程取得，不能由本仓库自动生成。
-
-先安装 MCP 与 OpenCode，编辑本机配置：
+应用与检查：
 
 ```bash
-bash scripts/install.sh --with-opencode
-nano ~/.config/personal-mcp-server/deploy.env
+./agent-mcp check        # 配置与后端检查
+./agent-mcp start        # 按启用项生成 systemd 用户服务并启动
+./agent-mcp status       # 查看 Gateway、OpenCode 后端及 PID
+./agent-mcp logs 50      # 最近 50 行本项目服务日志
 ```
 
-在配置里设置该设备的 `CHATGPT_TUNNEL_ID=tunnel_...`，需要时也可修改 `MCP_TOOL_PREFIX` 和端口。然后将对应的 API Key 安全写入：
+启动时按当前仓库路径生成 `deploy/systemd/` 下的本机用户服务定义，并通过 `systemctl --user` 管理。**不要把这些生成文件或实例私有配置提交到 Git。** 如需注销后常驻，可按设备策略启用 user lingering。
 
-`~/.local/share/opencode-mcp/runtime/control-plane-api-key`
+## 4. 可选：ChatGPT Tunnel
 
-并执行 `chmod 600` 设置该文件权限。**不要把真实密钥放进 README、命令行参数、Git 提交或聊天记录。**
+源码中包含 `components/tunnel-client/` 的组件说明和启动集成，但**不会将第三方运行时二进制、Tunnel ID 或 API Key 上传到仓库**。
 
-完成注册信息后，执行：
+从 [OpenAI Tunnel Client 官方发行版](https://github.com/openai/tunnel-client/releases) 获取适用于 AMD64 的运行时，按照官方清单核验 SHA-256，放置到本机目录（或在配置中指定绝对路径）；随后在私有配置中启用 `advisor_mcp`、`tunnel_client`，填写当前设备对应的 `existing_tunnel.id` 和 API Key 文件。配置 Advisor 代理工具范围后运行：
 
 ```bash
-# 一条命令完成 MCP + OpenCode CLI/Server + Tunnel 的安装及启动
-bash scripts/install.sh --all
-
-# 查看各服务状态和本机健康检查
-bash scripts/doctor.sh
+./agent-mcp check
+./agent-mcp restart
+./agent-mcp status
 ```
 
-`--all` 默认**不开放 LAN**。若未配置 Tunnel ID / API Key，脚本会明确报错且不会启动 Tunnel；先填好凭据后重试。Tunnel 下载来源是 [openai/tunnel-client 官方发行版](https://github.com/openai/tunnel-client/releases)，通过 `SHA256SUMS.txt` 验证归档；不将约 50 MB 的发行包二进制放进私有 Git 仓库。
+**多台设备同时在线时，每台设备分别使用自己的 Tunnel 身份。** Tunnel 只是 ChatGPT 与 Advisor 之间的网络入口；增加 OpenCode 容器不需要再创建 Tunnel。若更新 ChatGPT 可见的 MCP 工具，需在 ChatGPT 连接器侧刷新工具列表。
 
-### 安装参数
+## 5. 新增已有 Docker 容器
 
-| 参数 | 启用内容 |
-| --- | --- |
-| 不带参数 | MCP Server（127.0.0.1:18878） |
-| `--with-cli` | MCP + OpenCode v2 CLI |
-| `--with-opencode` | MCP + OpenCode v2 CLI + HTTP Server |
-| `--with-tunnel` | MCP + Tunnel Client（需要预先配置注册信息） |
-| `--with-lan` | MCP + LAN listener（需可信局域网） |
-| `--all` | MCP + OpenCode CLI/Server + Tunnel |
-| `--no-start` | 安装到用户目录，但**不创建或启动 systemd 服务** |
-
-多个选项可以组合，例如 `--with-opencode --with-lan`。用户无需运行 OpenCode MCP 客户端回连本机 MCP。
-
-## 3. 跨设备迁移配置（重点）
-
-例如从 **S100** 迁移部署方案至 **aifly-lap1 / aifly-server1 / 新 ARM64 板卡**：
-
-1. **新机器克隆仓库**：使用上述 `git clone`，不需要搬运 S100 的 `node_modules`、Tunnel 可执行文件、OpenCode 二进制或 systemd 固定路径。
-2. **执行安装器**：新开发机一般用 `bash scripts/install.sh --with-opencode`；只需远程 Shell 则用不带参数的安装命令。
-3. **编辑 `deploy.env`**：将 `MCP_TOOL_PREFIX` 改为 `lap1` / `server1` / `s100` 等；若端口被占用，修改 `MCP_PORT`、`MCP_LAN_PORT`、`OPENCODE_PORT`。
-4. **配置 OpenCode 模型**：OpenCode 的 `~/.config/opencode/opencode.json` 或 `opencode.jsonc` 属于设备/用户配置，需要自行迁移或编辑 Provider、模型 URL、API Key。本仓库**不覆盖它们**。跨设备使用本地 Qwen 模型时，尤其要修改 Provider URL 的主机地址。
-5. **配置 ChatGPT Tunnel**：每台设备注册独立的 Tunnel ID / API Key，写入对应本机配置与凭据文件，再运行 `bash scripts/install.sh --all`。旧设备继续在线时，**不要直接复制并并发复用同一个 Tunnel ID**；有意迁移原有 Tunnel ID 时，应先停掉旧设备上的隧道服务并迁移相应密钥。
-6. **验证与开机常驻**：执行 `bash scripts/doctor.sh`；若用户退出登录后仍需服务持续运行，根据系统权限执行 `sudo loginctl enable-linger "$USER"`。
-
-推荐的设备独立配置示例（只展示非机密内容）：
+前提：容器已启动；容器内有 `python3`、`bash`、`setsid`；架构和系统库能运行 OpenCode 2.1.2。宿主运行账号须有 Docker 操作权限。
 
 ```bash
-MCP_PORT=18878
-MCP_LAN_PORT=18879
-MCP_TOOL_PREFIX=lap1
-OPENCODE_VERSION=2.0.32
-OPENCODE_HOST=127.0.0.1
-OPENCODE_PORT=4096
-TUNNEL_VERSION=v0.0.14
-CHATGPT_TUNNEL_ID=tunnel_请替换为本机ID
-TUNNEL_HEALTH_PORT=38437
+# new-dev 是示例容器名称，需替换为实际名称
+docker ps --filter name=new-dev
+./agent-mcp add-container new-dev
+
+# 可选：复用容器内已有且版本正确的二进制、指定端口
+# ./agent-mcp add-container new-dev --binary /usr/local/bin/opencode --port 4102
+
+# 如容器无法访问继承的模型 API，请编辑私有配置：
+# models.containers.new-dev.provider.<provider>.options.baseURL
+
+./agent-mcp restart
+./agent-mcp status
 ```
 
-`TUNNEL_CLIENT_BIN` 和 `OPENCODE_CLI_BIN` 可填写已有程序的**绝对路径**，否则安装脚本优先复用已安装程序或在用户目录安装所需版本。Tunnel/Node 均从相应官方发行源获取，安装过程验证 SHA-256；OpenCode 使用官方 v2 npm 包。
+`add-container` 会校验运行中容器身份、登记 Container ID、选择未占用端口、配置独立 OpenCode Profile，默认复用宿主机模型配置作为起点。管理通路使用 Docker 执行接口，不要求向外发布容器的 OpenCode 端口。**容器被删除重建后必须重新登记**，避免误用同名新容器。
 
-**重要：现有 S100 原部署不会自动切换。** S100 原服务目前仍位于 `~/.local/share/opencode-mcp/` 并使用 `s100-opencode-*.service`；为避免覆盖，安装器检测到未经此仓库管理的同名运行目录时会拒绝安装。建议先在新设备验证。后续如需把 S100 原服务改为本仓库的可迁移服务，应单独执行一次受控切换。
-
-## 4. 运维与验证
+## 6. 日常运维与权限
 
 ```bash
-# 诊断（不会输出 Token / 密码）
-bash scripts/doctor.sh
-
-# 查看本机运行的 MCP
-curl -fsS http://127.0.0.1:18878/healthz
-
-# 查看用户服务
-systemctl --user status personal-mcp.service
-systemctl --user status personal-opencode.service
-systemctl --user status personal-tunnel.service
-
-# 工具发现验收，不执行 Shell 命令
-cd ~/.local/share/opencode-mcp
-npm test
+./agent-mcp status
+./agent-mcp check
+./agent-mcp restart      # 重新生成配置并重启已启用服务
+./agent-mcp stop         # 不停止 Docker 容器与外部模型服务
+./agent-mcp logs 100
+./agent-mcp set runtime.host.port 4100    # 非敏感标量配置
 ```
 
-`npm test` 应从已安装的 `~/.local/share/opencode-mcp/` 目录执行（该目录已安装 npm 依赖），需要运行中的 MCP、有效 Token，并且测试环境的 `MCP_TOOL_PREFIX` 与服务端一致。默认测试 `127.0.0.1:18878/mcp`；若自定义了端口与前缀，可显式设置 `MCP_PORT`、`MCP_TOOL_PREFIX`，或执行 `source bin/common.sh` 后使用对应环境变量。
+权限模型：**L1** 维持配置的受限工具范围；**L2** 以宿主服务用户或容器用户身份执行原生操作，不额外添加路径沙箱。若宿主服务用户可控制 Docker，L2 可能间接获得很高的主机权限。请仅对可信调用方授予 L2，不要将 Advisor/Gateway 直接公开到互联网。
 
-### 在容器或没有 systemd 的环境使用
+OpenCode 任务使用 `opencode_start/continue/status/diff/abort`；Shell 任务使用 `host_exec/poll/stop` 或 `container_exec/poll/stop`。模型配置在宿主与各容器独立生效，切换或更新运行配置不会自动启动外部模型服务。
 
-```bash
-bash scripts/install.sh --no-start
-# 随后运行：
-bash ~/.local/share/opencode-mcp/bin/run-mcp.sh local
-```
-
-`--no-start` 不启用 systemd，适合容器。MCP 实际权限由容器/宿主机运行账号决定，**不会自动变成只读或路径白名单模式**。
-
-### 后续更新
-
-```bash
-cd personal-mcp-server
-git pull --ff-only
-# 依照原本需要的组件重新运行安装命令，例如：
-bash scripts/install.sh --with-opencode
-```
-
-更新仓库**不会**自动更改实际运行服务；重新运行安装脚本时才会复制新源码并重启它管理的服务。Tunnel ID、API Key、模型 Provider 配置均留在本机，不随仓库同步。
-
-## 5. 安全边界与后续演进
-
-- MCP Token 允许远程执行服务用户有权限执行的任意命令；任何可访问 LAN 18879 端口的终端，都必须经过 Bearer 认证，但**不要公开映射该端口**。
-- 默认回环地址只允许本机/同机隧道访问；局域网访问需显式选择 `--with-lan`，并保证可信 LAN/VPN 和相应防火墙约束。
-- `runtime/`、`.env`、密钥和 OpenCode 模型凭据不能进 Git；GitHub 私有仓库也不是密钥仓库。
-- 未来规划统一 `Trusted` / `Restricted` 两种部署模式；当前只实现 Trusted，Restricted 应以 Linux 账号权限/容器隔离实施，不依赖 Agent 提示词。
-- 维护原则：**一套 MCP Server 源码、不同设备各自配置、OpenCode 本地工具优先、Git 作为版本源**。
-
-## 6. 仓库结构
+## 7. 仓库与可迁移内容
 
 ```text
-src/            MCP Server、stdio 兼容桥
-bin/            Shell MCP、OpenCode Server、Tunnel 启动脚本
-scripts/        一键安装、Node/OpenCode/Tunnel 安装与诊断
-config/         设备配置样例（不含实际 Token）
-systemd/        可移植的四个 systemd 用户服务
-test/           MCP 非侵入式验收测试
-package.json    Node 依赖
+agent-mcp                      统一管理 CLI（使用 PATH 中的 node）
+src/                           Gateway / 原生执行与会话路由
+deploy/                        配置、生成服务、运行时管理
+components/advisor-mcp/        Advisor MCP 与 Tunnel 启动逻辑
+components/tunnel-client/      Tunnel 组件说明；不含运行时二进制
+config/instance.example.json   无凭据配置模板
+docs/                          架构与使用资料
+tests/                         回归测试
+package.json                   Node.js 版本和依赖
 ```
 
-技术来源：[OpenAI Tunnel Client](https://github.com/openai/tunnel-client) · [OpenCode v2](https://opencode.ai/v2/v2/docs/build/)。
+跨机器部署只迁移 Git 仓库中的代码；每台机器单独配置：Docker 容器名称/ID、OpenCode 二进制路径、模型 API、Caller Token、Tunnel 身份，以及运行账号和挂载。**Git 不携带 `.local/`、`node_modules/`、`config/instance.local.json`、生成的 systemd 服务或第三方 Tunnel 二进制。**
+
+本分支是通用 AMD64 源码与部署接口，具体工作环境的历史记录不应被当作另一台机器的默认参数。
