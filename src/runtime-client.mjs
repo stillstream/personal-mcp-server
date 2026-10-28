@@ -2,6 +2,7 @@ import {lstat,readFile} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {join} from 'node:path';
 import {OpenCode} from '@opencode/client';
+import {sessionConcurrency} from './native-concurrency.mjs';
 import {Service} from '@opencode/client/service';
 import {PROJECT_ROOT} from './instance-config.mjs';
 export const RUNTIME_VERSION='2.1.2';
@@ -30,4 +31,4 @@ export async function runtimeBackend(config,target,name){if(target==='container'
  const info=await client.server.info({signal:AbortSignal.timeout(10000)});if(info.version!==RUNTIME_VERSION||info.pid!==record.pid)throw Error('RUNTIME_IDENTITY_MISMATCH');
  if(target==='container'){const expected=config.containers.find(c=>c.name===name);if(expected.opencode?.container_id&&expected.opencode.container_id!==record.container_id)throw Error('CONTAINER_CHANGED');}
  return {...record,client};}
-export async function runtimeHealth(config){const targets=[...(config.runtime?.host?.enabled?[{target:'host'}]:[]),...(config.containers||[]).filter(c=>c.opencode?.enabled).map(c=>({target:'container',name:c.name}))];return Promise.all(targets.map(async t=>{try{const b=await runtimeBackend(config,t.target,t.name);return {target:t.target,container:t.name||null,status:'ready',version:b.version,pid:b.pid}}catch(e){return {target:t.target,container:t.name||null,status:'unavailable',code:/^[A-Z_]+$/.test(e.message)?e.message:'RUNTIME_UNAVAILABLE'}}}));}
+export async function runtimeHealth(config){const targets=[...(config.runtime?.host?.enabled?[{target:'host'}]:[]),...(config.containers||[]).filter(c=>c.opencode?.enabled).map(c=>({target:'container',name:c.name}))];return Promise.all(targets.map(async t=>{try{const b=await runtimeBackend(config,t.target,t.name);return {target:t.target,container:t.name||null,status:'ready',version:b.version,pid:b.pid,max_concurrent:sessionConcurrency(config,t.target,t.name)}}catch(e){return {target:t.target,container:t.name||null,status:'unavailable',code:/^[A-Z_]+$/.test(e.message)?e.message:'RUNTIME_UNAVAILABLE'}}}));}
