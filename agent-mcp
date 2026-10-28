@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
-exec node "$ROOT/deploy/manage.mjs" "$@"
+exec /home/kevin/dsh-runtime/node-v24.21.0-linux-x64/bin/node "$ROOT/deploy/manage.mjs" "$@"

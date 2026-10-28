@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "machine_id": "replace-with-machine-id",
+  "machine_id": "local-agent-mcp",
   "listen": {
     "host": "127.0.0.1",
     "port": 18879
@@ -24,7 +24,20 @@
   ],
   "host_read_roots": {},
   "host_write_roots": {},
-  "containers": [],
+  "containers": [
+    {
+      "name": "CONTAINER_NAME",
+      "opencode": {
+        "enabled": false,
+        "binary": "/tmp/agent-mcp-bin/opencode-2.1.2",
+        "port": 4101,
+        "cwd": "/workspace/project",
+        "state_root": "/tmp/agent-mcp-opencode-CONTAINER_NAME",
+        "container_id": "CONTAINER_ID",
+        "max_concurrent": 3
+      }
+    }
+  ],
   "models": {
     "host": {
       "provider": {
@@ -53,7 +66,35 @@
       "model": "local/REPLACE_WITH_MODEL_ID",
       "small_model": "local/REPLACE_WITH_MODEL_ID"
     },
-    "containers": {}
+    "containers": {
+      "CONTAINER_NAME": {
+        "provider": {
+          "local": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Configure your endpoint and model ID",
+            "options": {
+              "baseURL": "http://127.0.0.1:18100/v1",
+              "apiKey": ""
+            },
+            "models": {
+              "REPLACE_WITH_MODEL_ID": {
+                "name": "Replace with exact server model ID",
+                "variants": {
+                  "low": {
+                    "reasoningEffort": "low"
+                  },
+                  "medium": {
+                    "reasoningEffort": "medium"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "model": "local/REPLACE_WITH_MODEL_ID",
+        "small_model": "local/REPLACE_WITH_MODEL_ID"
+      }
+    }
   },
   "advisor_mcp": {
     "enabled": false,
@@ -104,9 +145,10 @@
     "plugins": [],
     "host": {
       "enabled": false,
-      "binary": "/usr/local/bin/opencode",
+      "binary": "/home/kevin/.opencode/bin/opencode",
       "port": 4100,
-      "cwd": "/tmp"
+      "cwd": "/home/kevin/workspace/project",
+      "max_concurrent": 3
     }
   }
 }

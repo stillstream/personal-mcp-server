@@ -104,6 +104,7 @@ export async function loadInstance(configPath = process.env.AGENT_MCP_CONFIG || 
   if(c.runtime!==undefined&&!object(c.runtime))throw Error('RUNTIME_SETTINGS_INVALID');
   for(const settings of [c.runtime?.host,...(c.containers||[]).map(x=>x.opencode)].filter(Boolean)){if(!object(settings)||typeof settings.enabled!=='boolean'||!Number.isInteger(settings.port)||settings.port<1024||settings.port>65535||typeof settings.binary!=='string'||!isAbsolute(settings.binary)||settings.binary.includes('\0')||settings.cwd!==undefined&&(typeof settings.cwd!=='string'||!isAbsolute(settings.cwd)))throw Error('RUNTIME_SETTINGS_INVALID');}
   if(c.runtime?.plugins!==undefined&&!Array.isArray(c.runtime.plugins))throw Error('RUNTIME_PLUGINS_ARRAY_REQUIRED');
+  for(const settings of [c.runtime?.host,...(c.containers||[]).map(x=>x.opencode)].filter(Boolean))if(settings.max_concurrent!==undefined&&(!Number.isInteger(settings.max_concurrent)||settings.max_concurrent<1||settings.max_concurrent>32))throw Error('SESSION_CONCURRENCY_INVALID');
   const runtimePorts=[c.runtime?.host,...(c.containers||[]).map(x=>x.opencode)].filter(x=>x?.enabled).map(x=>x.port);if(new Set(runtimePorts).size!==runtimePorts.length)throw Error('BACKEND_PORT_ALREADY_CONFIGURED');
   normalizePaths(c, dirname(path));
   if (c.models !== undefined) {
