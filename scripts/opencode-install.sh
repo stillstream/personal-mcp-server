@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
-VERSION="${OPENCODE_VERSION:-2.1.2}"
+VERSION="2.1.2"
 MODE="${1:-check}"
-BIN="${OPENCODE_BIN:-$(command -v opencode || true)}"
+DEST="${OPENCODE_INSTALL_DIR:-$HOME/.local/bin}"
 case "$MODE" in
-  check)
-    echo "Pinned OpenCode version: $VERSION"
-    echo "Detected binary: ${BIN:-not found}"
-    if [[ -n "$BIN" ]]; then "$BIN" --version; fi
-    echo 'Install is intentionally not automatic; run with install after reviewing the official installer.'
-    ;;
-  install)
-    [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo "Linux x86_64 required" >&2; exit 1; }
-    command -v curl >/dev/null
-    echo "Installing pinned OpenCode $VERSION using official installer"
-    curl -fsSL https://opencode.ai/install | bash -s -- --version "$VERSION"
-    NEW_BIN="${OPENCODE_BIN:-$(command -v opencode || true)}"
-    [[ -n "$NEW_BIN" ]] || { echo "Installed binary not on PATH; set OPENCODE_BIN" >&2; exit 1; }
-    [[ "$("$NEW_BIN" --version)" == "$VERSION" ]] || { echo "VERSION_MISMATCH" >&2; exit 1; }
-    ;;
-  *) echo 'Usage: scripts/opencode-install.sh check|install' >&2; exit 2 ;;
+check)
+  if [[ -x "$DEST/opencode" ]]; then "$DEST/opencode" --version; else echo "not installed at $DEST/opencode"; fi
+  echo "Pinned required version: $VERSION"
+  ;;
+install)
+  [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo "Linux x86_64 required" >&2; exit 1; }
+  : "${OPENCODE_BINARY:?Set OPENCODE_BINARY to an approved OpenCode 2.1.2 binary}"
+  : "${OPENCODE_SHA256:?Set OPENCODE_SHA256 to its independently verified SHA-256}"
+  [[ -f "$OPENCODE_BINARY" && ! -L "$OPENCODE_BINARY" ]] || { echo "Invalid binary path" >&2; exit 1; }
+  echo "$OPENCODE_SHA256  $OPENCODE_BINARY" | sha256sum --check --status || { echo "SHA256 mismatch" >&2; exit 1; }
+  [[ "$("$OPENCODE_BINARY" --version)" == "$VERSION" ]] || { echo "Version mismatch" >&2; exit 1; }
+  mkdir -p "$DEST"
+  [[ ! -e "$DEST/opencode" ]] || { echo "Target exists: refusing overwrite" >&2; exit 1; }
+  install -m 0755 "$OPENCODE_BINARY" "$DEST/opencode"
+  "$DEST/opencode" --version
+  ;;
+*) echo 'Usage: opencode-install.sh check|install' >&2; exit 2 ;;
 esac
