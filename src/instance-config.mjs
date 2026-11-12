@@ -2,6 +2,7 @@ import { open, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_OPENCODE_CONFIG, resolveOpenCodeConfigPath, userModelConfig } from './user-opencode-config.mjs';
 
 export const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
 export const DEFAULT_CONFIG = resolve(PROJECT_ROOT, 'config/instance.local.json');
@@ -39,6 +40,7 @@ function normalizePaths(c, base) {
   const field = (o, k) => { if (o?.[k] !== undefined) o[k] = path(o[k]); };
   const map = o => { if (o === undefined) return; if (!object(o)) throw Error('CONFIG_PATH_MAP_INVALID'); for (const k of Object.keys(o)) o[k] = path(o[k]); };
   field(c, 'audit');
+  c.opencode_config = resolveOpenCodeConfigPath(c.opencode_config, base);
   for (const caller of c.callers || []) field(caller, 'token_file');
   map(c.host_read_roots); map(c.host_write_roots); map(c.advisor_mcp?.roots);
   field(c.existing_tunnel, 'api_key_file'); field(c.tunnel_client, 'binary');
@@ -46,44 +48,12 @@ function normalizePaths(c, base) {
   for (const k of ['state_file', 'host_scopes_file', 'host_backend']) field(c.agents, k);
   map(c.agents?.backends); map(c.agents?.host_backends);
   for (const k of ['guard_file', 'scratch_root']) field(c.host_git, k);
-  const profiles = [c.models?.host, ...Object.values(c.models?.containers || {})].filter(Boolean);
-  for (const profile of profiles) for (const provider of Object.values(profile.provider || {})) {
-    field(provider.options, 'apiKeyFile'); field(provider.options, 'api_key_file');
-  }
-}
-
-function validateProfile(profile) {
-  if (!object(profile) || !object(profile.provider) || !Object.keys(profile.provider).length) throw Error('MODEL_PROFILE_REQUIRED');
-  for (const [providerID, p] of Object.entries(profile.provider)) {
-    if (!id.test(providerID) || !object(p) || !object(p.options) || !object(p.models) || !Object.keys(p.models).length) throw Error('MODEL_PROVIDER_INVALID');
-    let u; try { u = new URL(p.options.baseURL); } catch { throw Error('MODEL_ENDPOINT_INVALID'); }
-    if (!['http:', 'https:'].includes(u.protocol) || !u.hostname || ['0.0.0.0', '[::]'].includes(u.hostname) || u.username || u.password || u.search || u.hash) throw Error('MODEL_ENDPOINT_INVALID');
-    if (p.options.apiKey !== undefined && (typeof p.options.apiKey !== 'string' || /[\0\r\n]/.test(p.options.apiKey) || /^\{(?:env|file):/.test(p.options.apiKey))) throw Error('MODEL_API_KEY_INVALID');
-    const refs = [p.options.apiKeyFile, p.options.api_key_file].filter(v => v !== undefined);
-    if (refs.length > 1 || refs.length && p.options.apiKey !== undefined) throw Error('AMBIGUOUS_SECRET_SOURCE');
-    for (const [modelID, m] of Object.entries(p.models)) if (!modelID || !object(m) || (m.variants !== undefined && !object(m.variants))) throw Error('MODEL_DEFINITION_INVALID');
-  }
-  for (const key of ['model', 'small_model']) {
-    if (key === 'small_model' && profile[key] === undefined) continue;
-    const value = profile[key];
-    if (typeof value !== 'string') throw Error('MODEL_SELECTION_INVALID');
-    const slash = value.indexOf('/'), provider = value.slice(0, slash), model = value.slice(slash + 1);
-    if (slash < 1 || !Object.hasOwn(profile.provider, provider) || !Object.hasOwn(profile.provider[provider].models, model)) throw Error('MODEL_SELECTION_INVALID');
-  }
 }
 
 export async function modelConfig(instance, target, container) {
-  const profile = target === 'host' ? instance.models?.host : target === 'container' ? instance.models?.containers?.[container] : undefined;
+  if (!['host', 'container'].includes(target)) throw Error('MODEL_TARGET_INVALID');
   if (target === 'container' && !instance.containers?.some(c => c.name === container)) throw Error('CONTAINER_DENIED');
-  validateProfile(profile);
-  const result = { provider: structuredClone(profile.provider), model: profile.model, ...(profile.small_model ? { small_model: profile.small_model } : {}) };
-  for (const p of Object.values(result.provider)) {
-    const file = p.options.apiKeyFile || p.options.api_key_file;
-    if (file) p.options.apiKey = await readSecret({ apiKeyFile: file }, 'apiKey', 'apiKeyFile');
-    else if (p.options.apiKey) p.options.apiKey = await readSecret(p.options, 'apiKey', 'apiKeyFile');
-    delete p.options.apiKeyFile; delete p.options.api_key_file;
-  }
-  return result;
+  return userModelConfig(instance.opencode_config || DEFAULT_OPENCODE_CONFIG);
 }
 
 export async function loadInstance(configPath = process.env.AGENT_MCP_CONFIG || DEFAULT_CONFIG) {
@@ -107,11 +77,7 @@ export async function loadInstance(configPath = process.env.AGENT_MCP_CONFIG || 
   for(const settings of [c.runtime?.host,...(c.containers||[]).map(x=>x.opencode)].filter(Boolean))if(settings.max_concurrent!==undefined&&(!Number.isInteger(settings.max_concurrent)||settings.max_concurrent<1||settings.max_concurrent>32))throw Error('SESSION_CONCURRENCY_INVALID');
   const runtimePorts=[c.runtime?.host,...(c.containers||[]).map(x=>x.opencode)].filter(x=>x?.enabled).map(x=>x.port);if(new Set(runtimePorts).size!==runtimePorts.length)throw Error('BACKEND_PORT_ALREADY_CONFIGURED');
   normalizePaths(c, dirname(path));
-  if (c.models !== undefined) {
-    if (!object(c.models) || (c.models.containers !== undefined && !object(c.models.containers))) throw Error('MODEL_PROFILE_REQUIRED');
-    if (c.models.host !== undefined) validateProfile(c.models.host);
-    for (const [name, profile] of Object.entries(c.models.containers || {})) { if (!c.containers?.some(x => x.name === name)) throw Error('CONTAINER_DENIED'); validateProfile(profile); }
-  }
+  if (c.models !== undefined) throw Error('LEGACY_MODEL_PROFILES_REMOVED_USE_USER_OPENCODE_CONFIG');
   Object.defineProperty(c, '__configPath', { value: path });
   return c;
 }

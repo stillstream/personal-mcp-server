@@ -27,7 +27,7 @@ Agent MCP Gateway            ← Caller L1/L2、任务和权限路由
 | OpenCode Container | 每个已登记容器独立的 OpenCode 2.1.2 实例 | `4101` 起，逐个分配 |
 | Secure Tunnel | 将 Advisor MCP 接入 ChatGPT；可选 | 健康检查端口示例 `38433` |
 
-**模型推理服务不属于本仓库**：项目仅配置 OpenAI-compatible Provider 的地址、模型 ID 和认证信息，不负责部署模型或启动 GPU 推理容器。**Docker 容器也不由本项目创建**；仅对已有容器登记、启动/停止其 OpenCode 管理进程。
+**模型推理服务与网络路由均不属于本仓库**：项目读取用户 OpenCode 配置中的 Provider、baseURL、模型 ID 和认证信息，不负责部署模型或启动 GPU 推理容器，也不负责 HAProxy、Local/LAN/Tailscale 选择或故障切换。用户填写的 endpoint 必须能从 Host 和相应 Container 直接访问；项目不会改写或代选网络地址。**Docker 容器也不由本项目创建**；仅对已有容器登记、启动/停止其 OpenCode 管理进程。
 
 ## 2. 运行环境与依赖
 
@@ -43,7 +43,7 @@ Agent MCP Gateway            ← Caller L1/L2、任务和权限路由
 | 模型 | 至少一个从执行目标可达的兼容 API 地址；模型名称以服务端实际 ID 为准 |
 | Tunnel（可选） | 已注册的 Tunnel ID、凭据，以及适用于 AMD64 的官方 Tunnel Client 运行时 |
 
-当前版本主要在 Ubuntu x86_64 上验证；**不宣称 macOS、Windows 或 ARM64 兼容**。如模型 API 配置为 `127.0.0.1`，桥接网络容器不能直接使用宿主机回环地址；Host 网络容器通常可以。
+当前版本主要在 Ubuntu x86_64 上验证；**不宣称 macOS、Windows 或 ARM64 兼容**。Provider endpoint 的可达性由用户的网络环境决定：例如 `127.0.0.1` 在桥接网络容器内指向容器自身，而不是宿主机。项目不会自动改写该地址。
 
 ## 3. 从 GitHub 部署
 
@@ -65,12 +65,15 @@ node deploy/project-config.mjs init
 
 私有实例路径：`config/instance.local.json`（仅本机存放，权限应为 0600，已加入 .gitignore）。模板见 `config/instance.example.json`。请根据当前设备逐项填写：
 
+**唯一模型配置源：** `opencode_config` 指向用户正在使用的 OpenCode 配置。Gateway 不再接受 `models.host` 或 `models.containers`；旧配置会以 `LEGACY_MODEL_PROFILES_REMOVED_USE_USER_OPENCODE_CONFIG` 明确拒绝。Host/Container 的私有 `opencode.json` 是运行时投影，不是第二份权威配置。
+
+
 1. `machine_id`：当前机器唯一标识；`callers`：调用方、L1/L2 权限与 Token。
 2. `runtime.host.enabled/binary/port/cwd`：是否启用宿主 OpenCode、**实际 2.1.2 二进制绝对路径**、唯一端口、绝对工作目录。
-3. `models.host`：Provider 的 `baseURL`、`apiKey`、模型 ID、默认模型及小模型；端点必须从宿主机可达。
+3. `opencode_config`：用户自己的 OpenCode JSONC 配置文件路径，默认 `~/.config/opencode/opencode.jsonc`。Provider、API endpoint、默认模型、小模型和 variants 只在这份文件中维护。文件须由当前用户持有、权限 0600，且不能是符号链接或硬链接。
 4. `advisor_mcp`：是否启用、文件根、向 ChatGPT 暴露的 `file_operations` 和 `gateway_tools`。
 5. `tunnel_client` 与 `existing_tunnel`：只有启用 ChatGPT Tunnel 时才设置二进制路径、Tunnel ID 和私有 API Key。
-6. 如需容器，先保持 `containers: []`、`models.containers: {}`，再按第 5 节登记。
+6. 如需容器，按第 5 节登记；不需要为每个容器单独配置模型。
 
 `project-config.mjs init` **只创建配置草稿**，不会自动安装 OpenCode、创建 Docker 容器、注册 Tunnel 或启动服务；模板内的 `REPLACE_WITH_...` 值必须替换。
 
@@ -111,14 +114,11 @@ docker ps --filter name=new-dev
 # 可选：复用容器内已有且版本正确的二进制、指定端口
 # ./agent-mcp add-container new-dev --binary /usr/local/bin/opencode --port 4102
 
-# 如容器无法访问继承的模型 API，请编辑私有配置：
-# models.containers.new-dev.provider.<provider>.options.baseURL
-
 ./agent-mcp restart
 ./agent-mcp status
 ```
 
-`add-container` 会校验运行中容器身份、登记 Container ID、选择未占用端口、配置独立 OpenCode Profile，默认复用宿主机模型配置作为起点。管理通路使用 Docker 执行接口，不要求向外发布容器的 OpenCode 端口。**容器被删除重建后必须重新登记**，避免误用同名新容器。
+`add-container` 会校验运行中容器身份、登记 Container ID、选择未占用端口并创建独立 OpenCode 运行环境。Host 与所有 Container 的模型配置都从同一份用户 OpenCode 配置生成，不存在 `models.host` / `models.containers` 两套配置。管理通路使用 Docker 执行接口，不要求向外发布容器的 OpenCode 端口。**容器被删除重建后必须重新登记**，避免误用同名新容器。
 
 ## 6. 日常运维与权限
 
@@ -126,6 +126,7 @@ docker ps --filter name=new-dev
 ./agent-mcp status
 ./agent-mcp check
 ./agent-mcp restart      # 重新生成配置并重启已启用服务
+./agent-mcp sync-models  # 从用户 OpenCode 配置重新同步 Host/Container 模型配置
 ./agent-mcp stop         # 不停止 Docker 容器与外部模型服务
 ./agent-mcp logs 100
 ./agent-mcp set runtime.host.port 4100    # 非敏感标量配置
@@ -133,7 +134,7 @@ docker ps --filter name=new-dev
 
 权限模型：**L1** 维持配置的受限工具范围；**L2** 以宿主服务用户或容器用户身份执行原生操作，不额外添加路径沙箱。若宿主服务用户可控制 Docker，L2 可能间接获得很高的主机权限。请仅对可信调用方授予 L2，不要将 Advisor/Gateway 直接公开到互联网。
 
-OpenCode 任务使用 `opencode_start/continue/status/diff/abort`；Shell 任务使用 `host_exec/poll/stop` 或 `container_exec/poll/stop`。模型配置在宿主与各容器独立生效，切换或更新运行配置不会自动启动外部模型服务。
+OpenCode 任务使用 `opencode_start/continue/status/diff/abort`；Shell 任务使用 `host_exec/poll/stop` 或 `container_exec/poll/stop`。Host 与 Container 保留独立运行目录、会话和安全边界，但共用同一份用户模型配置。`agent-mcp-model-sync.service` 监控配置文件；文件变化后重新生成两个运行配置并重启对应 OpenCode 后端。无效配置不会被应用，也不会自动回退到另一套模型配置。
 
 ## 7. 仓库与可迁移内容
 

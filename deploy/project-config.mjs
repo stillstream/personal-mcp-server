@@ -23,9 +23,8 @@ try {
     for (const c of cfg.callers) { const token = await readSecret(c, 'token', 'token_file'); if (token.length < 32) throw Error('TOKEN_TOO_SHORT'); if (tokens.has(token)) throw Error('DUPLICATE_CALLER'); tokens.add(token); }
     await validateConfigBoundary(cfg, cfg.__configPath, PROJECT_ROOT);
     if (cfg.tunnel_client?.enabled) { if (!cfg.existing_tunnel?.id) throw Error('TUNNEL_ID_REQUIRED'); await readSecret(cfg.existing_tunnel, 'api_key', 'api_key_file'); }
-    if (!cfg.models?.host) throw Error('MODEL_PROFILE_REQUIRED');
-    await modelConfig(cfg, 'host');
-    for (const name of Object.keys(cfg.models.containers || {})) await modelConfig(cfg, 'container', name);
+    const enabledTargets = [...(cfg.runtime?.host?.enabled ? ['host'] : []), ...(cfg.containers || []).filter(x => x.opencode?.enabled).map(x => x.name)];
+    if (enabledTargets.length) await modelConfig(cfg, 'host');
     const requiresEdit = [];
     const walk = (x, path) => { if (!x || typeof x !== 'object') return; for (const [k,v] of Object.entries(x)) { if (typeof v === 'string' && v.includes('REPLACE_WITH')) requiresEdit.push(path + '.' + k); else if (v && typeof v === 'object') walk(v, path + '.' + k); } };
     walk(cfg, 'instance');
@@ -38,7 +37,7 @@ try {
     let runtimePresent = false;
     try { const s = await lstat(cfg.tunnel_client?.binary || ''); runtimePresent = s.isFile() && !s.isSymbolicLink() && !!(s.mode & 0o111); } catch {}
     if (!runtimePresent) connectionBlockers.push('TUNNEL_RUNTIME_MISSING');
-    if (command === 'check') console.log(JSON.stringify({ status: requiresEdit.length ? 'DRAFT' : 'PASS', scope: 'offline-configuration-only', requires_edit: requiresEdit, callers: cfg.callers.map(c=>({id:c.id,level:c.level})), model_targets: ['host',...Object.keys(cfg.models.containers || {})], tunnel_enabled: !!cfg.tunnel_client?.enabled, connection_blockers: connectionBlockers, container_boundary_verified: false, runtime_verified: false }));
+    if (command === 'check') console.log(JSON.stringify({ status: requiresEdit.length ? 'DRAFT' : 'PASS', scope: 'offline-configuration-only', requires_edit: requiresEdit, callers: cfg.callers.map(c=>({id:c.id,level:c.level})), model_source: cfg.opencode_config, model_targets: enabledTargets, tunnel_enabled: !!cfg.tunnel_client?.enabled, connection_blockers: connectionBlockers, container_boundary_verified: false, runtime_verified: false }));
     else {
       if (!['host','container'].includes(target)) throw Error('RENDER_TARGET_REQUIRED');
       const model = await modelConfig(cfg, target, container);
@@ -50,6 +49,6 @@ try {
     }
   } else throw Error('USAGE_INIT_CHECK_OR_RENDER_TARGET');
 } catch (e) {
-  console.error(e.code === 'EEXIST' ? 'CONFIG_ALREADY_EXISTS_NO_OVERWRITE' : e.message === 'CONTAINER_DENIED' ? 'CONTAINER_DENIED: containers[].name must match models.containers keys; check template names' : /^[A-Z][A-Z0-9_]+$/.test(e.message) ? e.message : 'CONFIG_OPERATION_FAILED');
+  console.error(e.code === 'EEXIST' ? 'CONFIG_ALREADY_EXISTS_NO_OVERWRITE' : e.message === 'CONTAINER_DENIED' ? 'CONTAINER_DENIED: container must be registered in containers[]' : /^[A-Z][A-Z0-9_]+$/.test(e.message) ? e.message : 'CONFIG_OPERATION_FAILED');
   process.exitCode = 1;
 }

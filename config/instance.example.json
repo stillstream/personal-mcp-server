@@ -38,64 +38,6 @@
       }
     }
   ],
-  "models": {
-    "host": {
-      "provider": {
-        "local": {
-          "npm": "@ai-sdk/openai-compatible",
-          "name": "Configure your endpoint and model ID",
-          "options": {
-            "baseURL": "http://127.0.0.1:18100/v1",
-            "apiKey": ""
-          },
-          "models": {
-            "REPLACE_WITH_MODEL_ID": {
-              "name": "Replace with exact server model ID",
-              "variants": {
-                "low": {
-                  "reasoningEffort": "low"
-                },
-                "medium": {
-                  "reasoningEffort": "medium"
-                }
-              }
-            }
-          }
-        }
-      },
-      "model": "local/REPLACE_WITH_MODEL_ID",
-      "small_model": "local/REPLACE_WITH_MODEL_ID"
-    },
-    "containers": {
-      "CONTAINER_NAME": {
-        "provider": {
-          "local": {
-            "npm": "@ai-sdk/openai-compatible",
-            "name": "Configure your endpoint and model ID",
-            "options": {
-              "baseURL": "http://127.0.0.1:18100/v1",
-              "apiKey": ""
-            },
-            "models": {
-              "REPLACE_WITH_MODEL_ID": {
-                "name": "Replace with exact server model ID",
-                "variants": {
-                  "low": {
-                    "reasoningEffort": "low"
-                  },
-                  "medium": {
-                    "reasoningEffort": "medium"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "model": "local/REPLACE_WITH_MODEL_ID",
-        "small_model": "local/REPLACE_WITH_MODEL_ID"
-      }
-    }
-  },
   "advisor_mcp": {
     "enabled": false,
     "listen": {
@@ -150,5 +92,6 @@
       "cwd": "/home/kevin/workspace/project",
       "max_concurrent": 3
     }
-  }
+  },
+  "opencode_config": "~/.config/opencode/opencode.jsonc"
 }
