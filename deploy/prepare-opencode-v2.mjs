@@ -8,12 +8,12 @@ import { promisify } from 'node:util';
 import { mergeInstanceModels } from './merge-opencode.mjs';
 import { auditLegacyPreservation } from './audit-config-preservation.mjs';
 import { nativeTarget } from '../src/agent-process.mjs';
-import { loadInstance } from '../src/instance-config.mjs';
+import { loadInstance, STATE_ROOT, ensurePrivateDirectory } from '../src/instance-config.mjs';
 const dockerExec = promisify(execFile);
 
 // prepare writes a fresh owned profile; it never starts an OpenCode service.
 // Injectable OS boundaries allow exact consumer verification without Docker/model requests.
-export async function prepareContainer({ artifact: a, snapshot = '{}', instance, base = fileURLToPath(new URL('../.local/backends-v2', import.meta.url)), exec = dockerExec, verifyTarget = nativeTarget }) {
+export async function prepareContainer({ artifact: a, snapshot = '{}', instance, base = join(STATE_ROOT, 'backends-v2'), exec = dockerExec, verifyTarget = nativeTarget }) {
   if (a.version !== '2.0.32') throw Error('PINNED_V2_REQUIRED');
   if (instance && !instance.containers?.some(c => c.name === a.container)) throw Error('CONTAINER_DENIED');
   const root = a.container_state_root;
@@ -29,7 +29,8 @@ export async function prepareContainer({ artifact: a, snapshot = '{}', instance,
   const originalPlugins = cfg.plugin || [];
   cfg.plugin = []; cfg.mcp = { servers: {} }; cfg.permissions = [{ action: '*', resource: '*', effect: 'deny' }];
   delete cfg.permission; cfg.update = 'disable'; delete cfg.autoupdate;
-  await mkdir(base, { recursive: true, mode: 0o700 });
+  await ensurePrivateDirectory(STATE_ROOT);
+  await ensurePrivateDirectory(base);
   const state = await mkdtemp(join(base, 'container-'));
   await writeFile(join(state, 'original.jsonc'), snapshot, { mode: 0o600, flag: 'wx' });
   const preservation = auditLegacyPreservation(original, cfg);

@@ -25,7 +25,7 @@ const userConfig = (baseURL = 'http://127.0.0.1:12345/v1', apiKey = fakeKey) => 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'agent-mcp-unified-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  await mkdir(join(dir, 'private')); await mkdir(join(dir, 'work')); await mkdir(join(dir, 'install'));
+  await mkdir(join(dir, 'private'), { mode: 0o700 }); await mkdir(join(dir, 'work')); await mkdir(join(dir, 'install'));
   const file = join(dir, 'private/instance.json');
   const openCodeFile = join(dir, 'private/opencode.jsonc');
   const config = { machine_id: 'fixture', listen: { host: '127.0.0.1', port: 18879 }, callers: [{ id: 'frontend', level: 'L2', token: 'f'.repeat(64) }], containers: [{ name: 'fixture-container' }], host_read_roots: { work: '../work' }, host_write_roots: { work: '../work' }, audit: 'audit.jsonl', agents: { state_file: 'state.json', host_scopes_file: 'scopes.json' }, existing_tunnel: { id: 'test-tunnel-id', api_key: fakeKey }, opencode_config: openCodeFile };
@@ -83,7 +83,7 @@ test('project default is independent of cwd and all paths resolve beside instanc
   assert.equal(c.audit, join(f.dir, 'private/audit.jsonl'));
   assert.equal(c.host_read_roots.work, join(f.dir, 'work'));
   assert.equal(c.opencode_config, f.openCodeFile);
-  assert(DEFAULT_CONFIG.endsWith('/config/instance.local.json'));
+  assert(DEFAULT_CONFIG.endsWith('/.config/agent-mcp/instance.amd64.json'));
   const module = new URL('../src/instance-config.mjs', import.meta.url).href;
   const code = `import {loadInstance,DEFAULT_CONFIG} from ${JSON.stringify(module)};const c=await loadInstance(process.argv[1]);console.log(JSON.stringify({audit:c.audit,opencode_config:c.opencode_config,default:DEFAULT_CONFIG}))`;
   const a = await exec(process.execPath, ['--input-type=module', '-e', code, f.file], { cwd: f.dir });

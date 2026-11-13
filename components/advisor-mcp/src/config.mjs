@@ -1,8 +1,7 @@
 import { lstat, readFile, realpath } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { validateAdvisorPolicy, validateConfigBoundary } from '../../../src/config-policy.mjs'
-import { loadInstance } from '../../../src/instance-config.mjs'
-import { fileURLToPath } from 'node:url'
+import { loadInstance, DEFAULT_CONFIG, STATE_ROOT } from '../../../src/instance-config.mjs'
 
 export const ADVISOR_FILE_OPERATIONS = Object.freeze([
   'list_files', 'read_file', 'write_file', 'create_directory', 'file_info',
@@ -27,8 +26,7 @@ function inside(child, parent) {
 }
 function overlaps(a, b) { return inside(a, b) || inside(b, a) }
 
-export async function loadAdvisorConfig(configPath = process.env.AGENT_MCP_CONFIG) {
-  configPath ||= fileURLToPath(new URL('../../../config/instance.local.json', import.meta.url))
+export async function loadAdvisorConfig(configPath = process.env.AGENT_MCP_CONFIG || DEFAULT_CONFIG) {
   if (!isAbsolute(configPath)) throw Error('AGENT_MCP_CONFIG_ABSOLUTE_REQUIRED')
   const configStat = await lstat(configPath)
   if (!privateFile(configStat, process.getuid())) throw Error('INSTANCE_CONFIG_PRIVATE_REQUIRED')
@@ -39,7 +37,7 @@ export async function loadAdvisorConfig(configPath = process.env.AGENT_MCP_CONFI
   if (!advisor || advisor.enabled !== true) throw Error('ADVISOR_MCP_CONFIG_REQUIRED')
   const listen = advisor.listen
   const caller = instance.callers.find(x => x.id === advisor.gateway_caller)
-  const protectedPaths = await validateConfigBoundary(instance, configPath, fileURLToPath(new URL('../../../', import.meta.url)))
+  const protectedPaths = await validateConfigBoundary(instance, configPath, STATE_ROOT)
   const roots = new Map()
   for (const [name, path] of Object.entries(advisor.roots)) {
     const st = await lstat(path)

@@ -4,12 +4,12 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {runtimeBackend,runtimeHealth} from './runtime-client.mjs';
-import {PROJECT_ROOT} from './instance-config.mjs';
+import {STATE_ROOT,ensurePrivateDirectory} from './instance-config.mjs';
 import {nativeRequest} from './native-v2.mjs';
 import {sessionConcurrency,activeTargetSessions,assertSessionCapacity,assertSessionResumeCapacity,sessionMutex} from './native-concurrency.mjs';
-const exec=promisify(execFile),file=join(PROJECT_ROOT,'.local/native-tasks.json');let queue=Promise.resolve();const withSessionLock=sessionMutex();
+const exec=promisify(execFile),file=join(STATE_ROOT,'native-tasks.json');let queue=Promise.resolve();const withSessionLock=sessionMutex();
 async function load(){try{const s=JSON.parse(await readFile(file,'utf8'));if(s.version!==3)throw Error('NATIVE_STATE_VERSION_INVALID');return s}catch(e){if(e.code==='ENOENT')return{version:3,tasks:{}};throw e}}
-async function save(s){await mkdir(join(PROJECT_ROOT,'.local'),{recursive:true,mode:0o700});const p=file+'.'+randomUUID();await writeFile(p,JSON.stringify(s),{mode:0o600,flag:'wx'});await rename(p,file)}
+async function save(s){await ensurePrivateDirectory(STATE_ROOT);const p=file+'.'+randomUUID();await writeFile(p,JSON.stringify(s),{mode:0o600,flag:'wx'});await rename(p,file)}
 function allowed(caller,t){if(!t||caller.level!=='L2'&&t.owner!==caller.id)throw Error('TASK_DENIED');return t}
 function reference(t){return{id:t.model.id,providerID:t.model.providerID,...t.variant?{variant:t.variant}:{}}}
 async function choice(b,cwd,value,variant){

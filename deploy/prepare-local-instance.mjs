@@ -3,6 +3,7 @@ import { chmod, lstat, mkdir, readFile, readlink, writeFile } from 'node:fs/prom
 import { homedir, hostname } from 'node:os'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DEFAULT_CONFIG, STATE_ROOT } from '../src/instance-config.mjs'
 
 const home = homedir()
 const positional = process.argv.slice(2).filter(x => x !== '--dry-run')
@@ -10,8 +11,8 @@ const dryRun = process.argv.includes('--dry-run')
 if (!positional[0]) throw Error('EXPLICIT_LEGACY_SOURCE_REQUIRED_USE_PROJECT_CONFIG_INIT')
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const source = resolve(positional[0])
-const destination = resolve(positional[1] || projectRoot + '/config/instance.local.json')
-const stateDir = resolve(positional[2] || projectRoot + '/.local/legacy-advisor')
+const destination = resolve(positional[1] || DEFAULT_CONFIG)
+const stateDir = resolve(positional[2] || STATE_ROOT + '/legacy-advisor')
 const fileOps = ['list_files', 'read_file', 'write_file', 'create_directory', 'file_info', 'search_files', 'search_text', 'git_summary', 'delete_file', 'delete_directory', 'rename_file']
 const gatewayOps = ['gateway_status', 'opencode_start', 'opencode_continue', 'opencode_status', 'opencode_diff', 'opencode_abort']
 const mutationOps = new Set(['write_file', 'create_directory', 'delete_file', 'delete_directory', 'rename_file'])

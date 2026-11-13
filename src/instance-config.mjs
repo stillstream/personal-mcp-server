@@ -1,11 +1,21 @@
-import { open, realpath } from 'node:fs/promises';
+import { open, realpath, mkdir, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { DEFAULT_OPENCODE_CONFIG, resolveOpenCodeConfigPath, userModelConfig } from './user-opencode-config.mjs';
 
 export const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
-export const DEFAULT_CONFIG = resolve(PROJECT_ROOT, 'config/instance.local.json');
+export const CONFIG_ROOT = resolve(homedir(), '.config/agent-mcp');
+export const STATE_ROOT = resolve(homedir(), '.local/state/agent-mcp');
+export const DEFAULT_CONFIG = join(CONFIG_ROOT, 'instance.amd64.json');
+
+export async function ensurePrivateDirectory(path) {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  const s = await lstat(path);
+  if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077)) throw Error('PRIVATE_RUNTIME_DIRECTORY_REQUIRED');
+  return path;
+}
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const id = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -36,7 +46,7 @@ export async function readSecret(record, valueField, fileField) {
 }
 
 function normalizePaths(c, base) {
-  const path = v => { if (typeof v !== 'string' || !v || v.includes('\0')) throw Error('CONFIG_PATH_INVALID'); return resolve(base, v); };
+  const path = v => { if (typeof v !== 'string' || !v || v.includes('\0')) throw Error('CONFIG_PATH_INVALID'); return v === '~' ? homedir() : v.startsWith('~/') ? resolve(homedir(), v.slice(2)) : resolve(base, v); };
   const field = (o, k) => { if (o?.[k] !== undefined) o[k] = path(o[k]); };
   const map = o => { if (o === undefined) return; if (!object(o)) throw Error('CONFIG_PATH_MAP_INVALID'); for (const k of Object.keys(o)) o[k] = path(o[k]); };
   field(c, 'audit');

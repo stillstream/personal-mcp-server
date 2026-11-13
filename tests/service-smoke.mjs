@@ -8,12 +8,9 @@ import { spawnSync } from 'node:child_process'
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
 const temp = await mkdtemp(join(tmpdir(), 'agent-mcp-service-manager-'))
 const bin = join(temp, 'bin')
-const release = join(temp, 'release')
 const config = join(temp, 'instance.json')
 const log = join(temp, 'calls.log')
 await mkdir(bin)
-await mkdir(join(release, 'src'), { recursive: true })
-await writeFile(join(release, 'src/server.mjs'), '// fake release marker\n')
 await writeFile(config, '{"machine_id":"service-test"}\n', { mode: 0o600 })
 const systemctlScript = [
   '#!/usr/bin/env bash',
@@ -22,7 +19,7 @@ const systemctlScript = [
   '    if [ "$(printenv TEST_LEGACY_ACTIVE || true)" = 1 ]; then echo active; else echo not-found; fi',
   '    ;;',
   '  *"show agent-mcp.service -p LoadState --value"*) echo not-found ;;',
-  '  *"show agent-mcp.service -p Description --value"*) echo "Agent MCP Gateway local runtime" ;;',
+  '  *"show agent-mcp.service -p Description --value"*) echo "Agent MCP Gateway" ;;',
   '  *"show agent-mcp-shadow.service -p Description --value"*) echo "Agent MCP Gateway owned shadow runtime" ;;',
   '  *"stop agent-mcp.service"*|*"stop agent-mcp-shadow.service"*) echo "$*" >> "$TEST_LOG" ;;',
   '  *) echo unexpected-systemctl-call >&2; exit 9 ;;',
@@ -38,11 +35,14 @@ function run(...args) {
   return spawnSync('/bin/bash', [join(repo, 'deploy/service.sh'), ...args], { cwd: repo, env, encoding: 'utf8' })
 }
 try {
-  let result = run('start', release, config)
+  let result = run('start', config)
   assert.equal(result.status, 0, result.stderr)
   let calls = await readFile(log, 'utf8')
   assert.match(calls, /--unit=agent-mcp\.service/)
-  assert.match(calls, /--description=Agent MCP Gateway local runtime/)
+  assert.match(calls, /--description=Agent MCP Gateway/)
+  assert.match(calls, new RegExp('--working-directory=' + repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  assert.match(calls, new RegExp('AGENT_MCP_CONFIG=' + config.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  assert.match(calls, new RegExp(repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/src/server\\.mjs'))
   assert.doesNotMatch(calls, /--unit=agent-mcp-shadow\.service/)
 
   result = run('stop')
@@ -56,7 +56,7 @@ try {
   calls = await readFile(log, 'utf8')
   assert.match(calls, /--user stop agent-mcp-shadow\.service/)
 
-  result = spawnSync('/bin/bash', [join(repo, 'deploy/service.sh'), 'start', release, config], { cwd: repo, env: { ...env, TEST_LEGACY_ACTIVE: '1' }, encoding: 'utf8' })
+  result = spawnSync('/bin/bash', [join(repo, 'deploy/service.sh'), 'start', config], { cwd: repo, env: { ...env, TEST_LEGACY_ACTIVE: '1' }, encoding: 'utf8' })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /legacy Gateway still active/)
   console.log(JSON.stringify({ status: 'PASS', canonical_unit: 'agent-mcp.service', legacy_start_blocked: true, no_live_systemd_used: true }))

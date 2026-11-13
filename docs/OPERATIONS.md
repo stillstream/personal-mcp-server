@@ -63,3 +63,10 @@ npm run test:advisor:lifecycle
 ```
 
 配置和投影相关测试使用临时用户配置文件，不调用真实模型服务。真实推理验收必须由操作者在确认模型空闲、endpoint 可达后单独执行；本仓库不自动探测或切换模型网络。
+
+## 源码与运行数据目录
+
+- Git 工作区：当前仓库 checkout 根目录（`PROJECT_ROOT`）。开发、测试、提交和推送均在此目录完成。
+- 私有实例配置：`~/.config/agent-mcp/instance.amd64.json`。
+- 运行数据：`~/.local/state/agent-mcp/`，包括 `runtime/`、`host-jobs/`、`native-tasks.json`、`systemd/`、`rendered/`、`rollback/` 和 `credentials/`。
+- `~/.local/share/agent-mcp/releases/` 仅用于保留旧版本回滚，不作为开发工作区。

@@ -35,5 +35,5 @@ test('same-name recreated container is rejected before exec or credential copy',
 
 test('project manager rejects foreign AGENT_MCP_CONFIG instead of mixing instances', () => {
   assert.throws(() => managementConfigPath({ AGENT_MCP_CONFIG: '/tmp/other-private-instance.json' }), /MANAGEMENT_CONFIG_OVERRIDE_DENIED/);
-  assert(managementConfigPath({}).endsWith('/config/instance.local.json'));
+  assert(managementConfigPath({}).endsWith('/.config/agent-mcp/instance.amd64.json'));
 });

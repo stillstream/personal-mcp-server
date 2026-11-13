@@ -48,8 +48,8 @@ Agent MCP Gateway            ← Caller L1/L2、任务和权限路由
 ## 3. 从 GitHub 部署
 
 ```bash
-git clone -b amd64 git@github.com:stillstream/personal-mcp-server.git
-cd personal-mcp-server
+git clone -b amd64 git@github.com:stillstream/personal-mcp-server.git /path/to/agent-mcp
+cd /path/to/agent-mcp
 
 # 检查环境
 node --version
@@ -63,7 +63,7 @@ npm ci
 node deploy/project-config.mjs init
 ```
 
-私有实例路径：`config/instance.local.json`（仅本机存放，权限应为 0600，已加入 .gitignore）。模板见 `config/instance.example.json`。请根据当前设备逐项填写：
+私有实例路径：`~/.config/agent-mcp/instance.amd64.json`（仅本机存放，权限应为 0600，不在 Git 工作区）。用户模型配置默认是 `~/.config/opencode/opencode.jsonc`。模板见 `config/instance.example.json`。请根据当前设备逐项填写：
 
 **唯一模型配置源：** `opencode_config` 指向用户正在使用的 OpenCode 配置。Gateway 不再接受 `models.host` 或 `models.containers`；旧配置会以 `LEGACY_MODEL_PROFILES_REMOVED_USE_USER_OPENCODE_CONFIG` 明确拒绝。Host/Container 的私有 `opencode.json` 是运行时投影，不是第二份权威配置。
 
@@ -86,7 +86,7 @@ node deploy/project-config.mjs init
 ./agent-mcp logs 50      # 最近 50 行本项目服务日志
 ```
 
-启动时按当前仓库路径生成 `deploy/systemd/` 下的本机用户服务定义，并通过 `systemctl --user` 管理。**不要把这些生成文件或实例私有配置提交到 Git。** 如需注销后常驻，可按设备策略启用 user lingering。
+启动时从当前 Git 工作区运行源码；生成的 systemd 用户服务单元放在 `~/.local/state/agent-mcp/systemd/`，运行配置和任务状态放在 `~/.local/state/agent-mcp/`，私有实例配置放在 `~/.config/agent-mcp/`。这些数据均不进入 Git。`node_modules/` 是工作区本地依赖目录，也不会提交。**不要在仓库内创建 `.local/` 运行状态目录。** 如需注销后常驻，可按设备策略启用 user lingering。
 
 ## 4. 可选：ChatGPT Tunnel
 
@@ -150,6 +150,6 @@ tests/                         回归测试
 package.json                   Node.js 版本和依赖
 ```
 
-跨机器部署只迁移 Git 仓库中的代码；每台机器单独配置：Docker 容器名称/ID、OpenCode 二进制路径、模型 API、Caller Token、Tunnel 身份，以及运行账号和挂载。**Git 不携带 `.local/`、`node_modules/`、`config/instance.local.json`、生成的 systemd 服务或第三方 Tunnel 二进制。**
+跨机器部署只迁移 Git 仓库中的代码；每台机器单独配置：Docker 容器名称/ID、OpenCode 二进制路径、模型 API、Caller Token、Tunnel 身份，以及运行账号和挂载。**Git 不携带 `node_modules/`、`~/.config/agent-mcp/instance.amd64.json`、`~/.local/state/agent-mcp/` 中的运行数据、生成的 systemd 服务或第三方 Tunnel 二进制。**
 
-本分支是通用 AMD64 源码与部署接口，具体工作环境的历史记录不应被当作另一台机器的默认参数。
+本分支是通用 AMD64 源码与部署接口。推荐在一个固定 Git 工作区维护源码，使用 XDG Config/State 分别保存私有配置和运行状态；`~/.local/share/agent-mcp/releases/` 仅用于可选的历史回滚，不作为日常开发目录。

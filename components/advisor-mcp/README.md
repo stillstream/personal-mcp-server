@@ -10,7 +10,7 @@ The Tunnel client is a separate component under components/tunnel-client. Its he
 
 ## Single instance configuration
 
-Both the Gateway and this advisor server read the same private config: ~/.config/agent-mcp/instance.json. Start from config/instance.example.json; keep the private file mode 0600 and never commit credentials.
+Both the Gateway and this advisor server read the same private config: ~/.config/agent-mcp/instance.amd64.json. Start from config/instance.example.json; keep the private file mode 0600 and never commit credentials.
 
 - callers[].level selects Host L1 (read) or L2 (write/task control).
 - host_read_roots and host_write_roots bound Gateway Host tools.

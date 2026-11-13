@@ -69,15 +69,15 @@
     "target_url": "http://127.0.0.1:8787/mcp"
   },
   "agents": {
-    "state_file": "../.local/tasks.json",
-    "host_scopes_file": "../.local/host-scopes.json",
+    "state_file": "~/.local/state/agent-mcp/native-agent-state.json",
+    "host_scopes_file": "~/.local/state/agent-mcp/host-scopes.json",
     "host_backends": {},
     "backends": {}
   },
   "opencode_host": {
     "enabled": false
   },
-  "audit": "../.local/audit.jsonl",
+  "audit": "~/.local/state/agent-mcp/audit.jsonl",
   "permissions": {
     "l1": "current",
     "l2": "full"

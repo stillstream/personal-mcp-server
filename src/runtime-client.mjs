@@ -4,9 +4,9 @@ import {join} from 'node:path';
 import {OpenCode} from '@opencode/client';
 import {sessionConcurrency} from './native-concurrency.mjs';
 import {Service} from '@opencode/client/service';
-import {PROJECT_ROOT} from './instance-config.mjs';
+import {STATE_ROOT} from './instance-config.mjs';
 export const RUNTIME_VERSION='2.1.2';
-export function runtimeDirectory(target,name){if(target==='host')return join(PROJECT_ROOT,'.local/runtime/host');if(target!=='container'||!name||!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name))throw Error('RUNTIME_TARGET_INVALID');return join(PROJECT_ROOT,'.local/runtime/containers',name);}
+export function runtimeDirectory(target,name){if(target==='host')return join(STATE_ROOT,'runtime/host');if(target!=='container'||!name||!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name))throw Error('RUNTIME_TARGET_INVALID');return join(STATE_ROOT,'runtime/containers',name);}
 export async function privateRecord(file){const s=await lstat(file);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o077))throw Error('PRIVATE_RUNTIME_RECORD_REQUIRED');try{return JSON.parse(await readFile(file,'utf8'));}catch{throw Error('RUNTIME_RECORD_INVALID');}}
 // Fixed loopback proxy inside a container: no published port or host networking is required.
 const proxy=String.raw`import sys,json,urllib.request,urllib.error,base64

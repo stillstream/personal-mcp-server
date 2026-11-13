@@ -7,7 +7,7 @@ generated_key=""
 cleanup() {
   AGENT_MCP_CONFIG="$config" MCP_TUNNEL_STATE_DIR="$tmp/state" TUNNEL_CLIENT="$PWD/test/fake-tunnel-client.py" ./start-openai-tunnel.sh down >/dev/null 2>&1 || true
   if [ -n "$generated_key" ]; then
-    case "$generated_key" in "$PWD/../../.local/credentials/"tunnel-*.key) rm -f -- "$generated_key" ;; esac
+    case "$generated_key" in "${XDG_STATE_HOME:-$HOME/.local/state}/agent-mcp/credentials/"tunnel-*.key) rm -f -- "$generated_key" ;; esac
   fi
   rm -rf "$tmp"
 }
@@ -55,7 +55,7 @@ export TUNNEL_CLIENT="$PWD/test/fake-tunnel-client.py"
 export CONTROL_PLANE_TUNNEL_ID=test-tunnel
 export CONTROL_PLANE_API_KEY_FILE="$tmp/chatgpt.token"
 if [ "${LIFECYCLE_INLINE_SECRETS:-0}" = 1 ]; then
-  generated_key="$PWD/../../.local/credentials/tunnel-$(printf %s "$config" | sha256sum | cut -d' ' -f1).key"
+  generated_key="${XDG_STATE_HOME:-$HOME/.local/state}/agent-mcp/credentials/tunnel-$(printf %s "$config" | sha256sum | cut -d' ' -f1).key"
 fi
 ./start-openai-tunnel.sh up
 curl -fsS "http://127.0.0.1:$advisor_port/healthz" | grep -q '"alpha"'

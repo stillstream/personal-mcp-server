@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { lstat, readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { loadInstance } from '../src/instance-config.mjs'
+import { loadInstance, DEFAULT_CONFIG, STATE_ROOT } from '../src/instance-config.mjs'
 import { validateConfigBoundary, validateContainerBoundaries } from '../src/config-policy.mjs'
 import { loadAdvisorConfig } from '../components/advisor-mcp/src/config.mjs'
 
-const [configPath, installRoot] = process.argv.slice(2)
-if (!configPath || !installRoot || !isAbsolute(configPath) || !isAbsolute(installRoot)) throw Error('ABSOLUTE_CONFIG_AND_RELEASE_REQUIRED')
+const [configArg, stateArg] = process.argv.slice(2)
+const configPath = configArg || DEFAULT_CONFIG
+const installRoot = stateArg || STATE_ROOT
+if (!isAbsolute(configPath) || !isAbsolute(installRoot)) throw Error('ABSOLUTE_CONFIG_AND_STATE_REQUIRED')
 const configStat = await lstat(configPath)
 if (!configStat.isFile() || configStat.isSymbolicLink() || configStat.nlink !== 1 || configStat.uid !== process.getuid() || (configStat.mode & 0o077) !== 0) throw Error('INSTANCE_CONFIG_PRIVATE_REQUIRED')
 const config = await loadInstance(configPath)

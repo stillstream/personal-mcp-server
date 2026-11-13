@@ -1,11 +1,10 @@
 import { mkdir, lstat, writeFile, rename, unlink } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { loadInstance, readSecret } from './instance-config.mjs';
-const project = fileURLToPath(new URL('../', import.meta.url));
+import { loadInstance, readSecret, STATE_ROOT, ensurePrivateDirectory, DEFAULT_CONFIG } from './instance-config.mjs';
 export function lifecycleKeyPath(instance, configPath) {
-  if (instance.existing_tunnel?.api_key !== undefined) return join(project, '.local/credentials', 'tunnel-' + createHash('sha256').update(resolve(configPath)).digest('hex') + '.key');
+  if (instance.existing_tunnel?.api_key !== undefined) return join(STATE_ROOT, 'credentials', 'tunnel-' + createHash('sha256').update(resolve(configPath)).digest('hex') + '.key');
   return instance.existing_tunnel?.api_key_file || '';
 }
 // A generated transport credential, never a second human-maintained source.
@@ -13,7 +12,7 @@ export function lifecycleKeyPath(instance, configPath) {
 export async function materializeTunnelKey(instance, configPath) {
   const key = await readSecret(instance.existing_tunnel, 'api_key', 'api_key_file');
   if (instance.existing_tunnel?.api_key === undefined) return lifecycleKeyPath(instance, configPath);
-  for (const dir of [join(project, '.local'), join(project, '.local/credentials')]) {
+  for (const dir of [join(project, '.local'), join(STATE_ROOT, 'credentials')]) {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const s = await lstat(dir);
     if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o077)) throw Error('PRIVATE_RUNTIME_DIRECTORY_REQUIRED');
@@ -26,6 +25,6 @@ export async function materializeTunnelKey(instance, configPath) {
   return path;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { const path = process.argv[2] || process.env.AGENT_MCP_CONFIG || join(project, 'config/instance.local.json'); await materializeTunnelKey(await loadInstance(path), path); }
+  try { const path = process.argv[2] || process.env.AGENT_MCP_CONFIG || DEFAULT_CONFIG; await materializeTunnelKey(await loadInstance(path), path); }
   catch { console.error('TUNNEL_CREDENTIAL_PREPARATION_FAILED'); process.exitCode = 1; }
 }

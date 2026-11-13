@@ -6,7 +6,7 @@ import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { mergeInstanceModels } from './merge-opencode.mjs';
-import { loadInstance } from '../src/instance-config.mjs';
+import { loadInstance, STATE_ROOT } from '../src/instance-config.mjs';
 import { readUserOpenCodeConfig } from '../src/user-opencode-config.mjs';
 import { checkLiveContainerBoundary } from '../src/config-policy.mjs';
 
@@ -18,12 +18,12 @@ if (!gateway.containers.some(c => c.name === name)) throw Error('CONTAINER_DENIE
 const port = Number(portText);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error('PORT_INVALID');
 const d = JSON.parse((await exec('/usr/bin/docker', ['inspect', '--format', '{{json .}}', name], { timeout: 5000, maxBuffer: 1048576 })).stdout);
-await checkLiveContainerBoundary(d, [join(homedir(), '.config/agent-mcp'), join(homedir(), '.local/share/agent-mcp')]);
+await checkLiveContainerBoundary(d, [join(homedir(), '.config/agent-mcp'), join(homedir(), '.local/share/agent-mcp'), STATE_ROOT]);
 if (!d.State.Running) throw Error('CONTAINER_NOT_RUNNING');
 
 const source = await readUserOpenCodeConfig(gateway.opencode_config);
 const merged = await mergeInstanceModels(source, gateway, 'container', name);
-const state = join(homedir(), '.config/agent-mcp/backends', name + '-' + randomUUID());
+const state = join(STATE_ROOT, 'backends', name + '-' + randomUUID());
 await mkdir(state, { recursive: true, mode: 0o700 });
 const sourceFile = join(state, 'user-opencode-source.json');
 await writeFile(sourceFile, JSON.stringify(source), { mode: 0o600, flag: 'wx' });

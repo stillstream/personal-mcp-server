@@ -2,7 +2,7 @@
 import { readFile, writeFile, mkdir, lstat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { DEFAULT_CONFIG, PROJECT_ROOT, loadInstance, readSecret, modelConfig } from '../src/instance-config.mjs';
+import { DEFAULT_CONFIG, PROJECT_ROOT, STATE_ROOT, ensurePrivateDirectory, loadInstance, readSecret, modelConfig } from '../src/instance-config.mjs';
 import { validateConfigBoundary } from '../src/config-policy.mjs';
 
 // No service operations, Docker commands, or network/model calls in this CLI.
@@ -12,7 +12,7 @@ try {
   if (command === 'init') {
     const cfg = JSON.parse(await readFile(join(PROJECT_ROOT, 'config/instance.example.json'), 'utf8'));
     for (const caller of cfg.callers) caller.token = randomBytes(32).toString('hex');
-    await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
+    await ensurePrivateDirectory(dirname(configPath));
     await writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
     console.log(JSON.stringify({ status: 'CREATED_DRAFT', config: configPath, services_started: false, secrets_printed: false }));
   } else if (command === 'check' || command === 'render') {
@@ -21,7 +21,7 @@ try {
     if (!['127.0.0.1', '::1'].includes(cfg.listen?.host)) throw Error('LOOPBACK_REQUIRED');
     const tokens = new Set();
     for (const c of cfg.callers) { const token = await readSecret(c, 'token', 'token_file'); if (token.length < 32) throw Error('TOKEN_TOO_SHORT'); if (tokens.has(token)) throw Error('DUPLICATE_CALLER'); tokens.add(token); }
-    await validateConfigBoundary(cfg, cfg.__configPath, PROJECT_ROOT);
+    await validateConfigBoundary(cfg, cfg.__configPath, STATE_ROOT);
     if (cfg.tunnel_client?.enabled) { if (!cfg.existing_tunnel?.id) throw Error('TUNNEL_ID_REQUIRED'); await readSecret(cfg.existing_tunnel, 'api_key', 'api_key_file'); }
     const enabledTargets = [...(cfg.runtime?.host?.enabled ? ['host'] : []), ...(cfg.containers || []).filter(x => x.opencode?.enabled).map(x => x.name)];
     if (enabledTargets.length) await modelConfig(cfg, 'host');
@@ -41,8 +41,9 @@ try {
     else {
       if (!['host','container'].includes(target)) throw Error('RENDER_TARGET_REQUIRED');
       const model = await modelConfig(cfg, target, container);
-      const dir = join(PROJECT_ROOT, '.local/rendered');
-      for (const d of [join(PROJECT_ROOT,'.local'),dir]) { await mkdir(d,{recursive:true,mode:0o700}); const s=await lstat(d); if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid()||(s.mode&0o077)) throw Error('PRIVATE_RUNTIME_DIRECTORY_REQUIRED'); }
+      const dir = join(STATE_ROOT, 'rendered');
+      await ensurePrivateDirectory(STATE_ROOT);
+      await ensurePrivateDirectory(dir);
       const path = join(dir, target + '-' + randomUUID() + '.json');
       await writeFile(path, JSON.stringify(model, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
       console.log(JSON.stringify({ status: requiresEdit.length ? 'DRAFT_RENDERED' : 'RENDERED', target, config: path, server_started: false, model_called: false }));

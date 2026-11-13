@@ -35,3 +35,11 @@
 ## 修改原则
 
 优先复用现有 Gateway 生命周期与安全策略，避免增加第二套配置管理、模型路由器或并行服务。每个新能力必须说明唯一数据源、运行时投影、失败行为和回滚方式。
+
+## 源码与状态目录约定
+
+- 唯一开发仓库为当前 Git checkout 根目录（`PROJECT_ROOT`）。
+- 私有实例配置默认在 `~/.config/agent-mcp/instance.amd64.json`。
+- 可变运行状态统一使用 `STATE_ROOT=~/.local/state/agent-mcp`，不得写入 `PROJECT_ROOT/.local` 或 Git 工作区。
+- systemd 生成单元也放在 `STATE_ROOT/systemd`，再链接到用户 systemd。
+- Release 目录只作回滚快照，不作为日常开发入口。

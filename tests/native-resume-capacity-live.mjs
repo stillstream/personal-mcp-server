@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import {PROJECT_ROOT} from '../src/instance-config.mjs';
+import {STATE_ROOT,DEFAULT_CONFIG} from '../src/instance-config.mjs';
 if(!process.argv.includes('--live'))throw Error('EXPLICIT_LIVE_FLAG_REQUIRED');
 const client=new Client({name:'resume-capacity-live-acceptance',version:'1'}),started=[],receipt={target:'host',limit:3,status:'pending',cleanup_pending:[],retained_fixtures:[],active_sessions:[]};let dir;
 const parse=r=>JSON.parse(r.content.find(x=>x.type==='text').text);
@@ -13,8 +13,8 @@ async function call(name,args){const r=await client.callTool({name,arguments:arg
 async function poll(id,predicate,timeout=90000){const end=Date.now()+timeout;while(Date.now()<end){const s=await call('opencode_status',{task_id:id});if(predicate(s))return s;if(['failed','aborted'].includes(s.status))throw Error('TASK_TERMINATED:'+s.status);await new Promise(r=>setTimeout(r,350));}throw Error('TASK_TIMEOUT:'+id)}
 async function cleanup(id){try{let s=await call('opencode_status',{task_id:id});if(['completed','aborted','failed'].includes(s.status))return true;await call('opencode_abort',{task_id:id});s=await poll(id,x=>['completed','aborted','failed'].includes(x.status),15000);return true}catch{return false}}
 try{
- const config=JSON.parse(await readFile(join(PROJECT_ROOT,'config/instance.local.json'),'utf8'));assert.equal(config.runtime.host.max_concurrent??3,3);
- const store=JSON.parse(await readFile(join(PROJECT_ROOT,'.local/native-tasks.json'),'utf8'));const active=Object.values(store.tasks).filter(t=>t.target==='host'&&['creating','submitted','running','queued','uncertain','aborting','abort_requested'].includes(t.phase));assert.equal(active.length,0,'HOST_TARGET_NOT_IDLE');
+ const config=JSON.parse(await readFile(DEFAULT_CONFIG,'utf8'));assert.equal(config.runtime.host.max_concurrent??3,3);
+ const store=JSON.parse(await readFile(join(STATE_ROOT,'native-tasks.json'),'utf8'));const active=Object.values(store.tasks).filter(t=>t.target==='host'&&['creating','submitted','running','queued','uncertain','aborting','abort_requested'].includes(t.phase));assert.equal(active.length,0,'HOST_TARGET_NOT_IDLE');
  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:8787/mcp')));const prior=Object.values(store.tasks).find(t=>t.target==='host'&&t.phase==='completed'&&t.cwd?.startsWith('/home/kevin/dsh-runtime/tmp/agent-mcp-native-'));assert(prior,'COMPLETED_SYNTHETIC_HOST_SESSION_REQUIRED');const priorStatus=await call('opencode_status',{task_id:prior.id});assert.equal(priorStatus.status,'completed');receipt.completed_session_id=prior.id;
  dir=await mkdtemp(join(tmpdir(),'agent-mcp-resume-capacity-'));
  for(let i=0;i<3;i++){const file=dir+'/marker-'+i+'.txt',marker='RESUME_CAP_'+i+'_'+randomUUID().replaceAll('-',''),command='sleep 20; printf '+marker+' > '+file,prompt='Synthetic capacity test only. Use the native shell tool to run exactly '+JSON.stringify(command)+'. Stay in this temporary directory and reply DONE after completion.';const task=await call('opencode_start',{target:'host',cwd:dir,prompt});started.push(task.task_id);receipt.active_sessions.push({task_id:task.task_id,session_id:task.session_id});}
@@ -26,6 +26,6 @@ try{
  for(const id of [...started].reverse())if(!await cleanup(id))receipt.cleanup_pending.push(id);await client.close().catch(()=>{});
  if(dir){if(receipt.cleanup_pending.length)receipt.retained_fixtures.push(dir);else await rm(dir,{recursive:true,force:true});}
  receipt.cleanup=receipt.cleanup_pending.length?'INCOMPLETE_FIXTURE_PRESERVED':'all started sessions reached terminal state; temporary fixture removed';if(receipt.cleanup_pending.length)receipt.status='FAIL_CLEANUP';
- await writeFile(join(PROJECT_ROOT,'.local/verification/native-resume-capacity-live.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
+ await writeFile(join(STATE_ROOT,'verification/native-resume-capacity-live.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
 }
 if(receipt.status!=='PASS')process.exitCode=1;console.log(JSON.stringify(receipt));

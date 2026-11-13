@@ -11,7 +11,7 @@
     "config:init": "node deploy/project-config.mjs init",
     "config:check": "node deploy/project-config.mjs check",
     "config:render": "node deploy/project-config.mjs render",
-    "test:config": "node --test tests/unified-config.test.mjs tests/project-private-boundary.test.mjs tests/full-l2.test.mjs tests/runtime-registration.test.mjs tests/model-sync-watch.test.mjs",
+    "test:config": "node --test tests/unified-config.test.mjs tests/project-private-boundary.test.mjs tests/full-l2.test.mjs tests/runtime-registration.test.mjs tests/model-sync-watch.test.mjs tests/state-layout.test.mjs",
     "test:host": "node --test tests/host-guard.test.mjs tests/host-git.test.mjs",
     "test:advisor": "cd components/advisor-mcp && npm test",
     "test:advisor:lifecycle": "cd components/advisor-mcp && bash test/test-lifecycle.sh",

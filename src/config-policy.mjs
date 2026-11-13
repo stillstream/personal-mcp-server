@@ -1,3 +1,4 @@
+import { STATE_ROOT } from './instance-config.mjs';
 import {realpath,lstat,readFile}from'node:fs/promises';import{execFile}from'node:child_process';import{promisify}from'node:util';
 const exec=promisify(execFile);import{resolve,relative,isAbsolute,dirname,basename}from'node:path';
 import{credentialReferencePaths}from'./credential-environment.mjs';const within=(child,parent)=>{const r=relative(parent,child);return r===''||(!r.startsWith('../')&&r!=='..'&&!isAbsolute(r));};
@@ -42,7 +43,7 @@ export function modelSecretPaths(config) {
 }
 export async function validateConfigBoundary(config,configPath,installRoot){
  validateAdvisorPolicy(config);
- const paths=[configPath,installRoot,config.opencode_config,config.audit,...(config.callers||[]).map(c=>c.token_file),...(config.protected_paths||[])];
+ const paths=[configPath,installRoot,STATE_ROOT,config.opencode_config,config.audit,...(config.callers||[]).map(c=>c.token_file),...(config.protected_paths||[])];
  if(config.agents){if(!isAbsolute(config.agents.state_file||''))throw Error('ABSOLUTE_AGENT_STATE_REQUIRED');paths.push(config.agents.state_file);for(const p of [...Object.values(config.agents.backends||{}),...Object.values(config.agents.host_backends||{}),...(config.agents.host_backend?[config.agents.host_backend]:[])]){if(typeof p!=='string'||!isAbsolute(p))throw Error('ABSOLUTE_BACKEND_RECORD_REQUIRED');let b;try{b=JSON.parse(await readFile(p,'utf8'));}catch{throw Error('BACKEND_RECORD_INVALID');}const credential=b.api_major===2?b.connection_file:b.password_file;if(!isAbsolute(credential||''))throw Error('ABSOLUTE_BACKEND_CREDENTIAL_REQUIRED');const credentialPaths=credentialReferencePaths(b.container_credential_environment_files);if(b.target==='host'&&credentialPaths.length)throw Error('HOST_CONTAINER_CREDENTIAL_ENV_DENIED');paths.push(dirname(p),credential);if(b.target==='host'){for(const field of ['root','binary','guard_file','proof_file',...(b.gateway_token_file?['gateway_token_file']:[])]){if(!isAbsolute(b[field]||''))throw Error('ABSOLUTE_HOST_CONTROL_REQUIRED');paths.push(b[field]);}}}}
  if(config.agents?.host_scopes_file){if(!isAbsolute(config.agents.host_scopes_file))throw Error('ABSOLUTE_HOST_SCOPES_REQUIRED');paths.push(config.agents.host_scopes_file);}
  if(config.host_git)for(const field of ['guard_file','scratch_root']){if(!isAbsolute(config.host_git[field]||''))throw Error('ABSOLUTE_HOST_GIT_CONTROL_REQUIRED');paths.push(config.host_git[field]);}

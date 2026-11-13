@@ -3,7 +3,7 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 
 # One private instance file controls Gateway, advisor roots, caller level and Tunnel references.
-AGENT_MCP_CONFIG="${AGENT_MCP_CONFIG:-$PWD/../../config/instance.local.json}"
+AGENT_MCP_CONFIG="${AGENT_MCP_CONFIG:-$HOME/.config/agent-mcp/instance.amd64.json}"
 [ -r "$AGENT_MCP_CONFIG" ] || { echo "AGENT_MCP_CONFIG is not readable: $AGENT_MCP_CONFIG" >&2; exit 2; }
 export AGENT_MCP_CONFIG
 mapfile -d "" -t INSTANCE_VALUES < <(node src/config-cli.mjs "$AGENT_MCP_CONFIG")
@@ -18,7 +18,7 @@ CONTROL_PLANE_API_KEY_FILE="${INSTANCE_VALUES[6]}"
 MCP_ROOTS_JSON="${INSTANCE_VALUES[7]}"
 MCP_ENABLED_OPERATIONS="${INSTANCE_VALUES[8]}"
 export MCP_HOST MCP_PORT MCP_PATH MCP_ALLOW_UNAUTH_LOCAL=1 MCP_ROOTS_JSON MCP_ENABLED_OPERATIONS CONTROL_PLANE_TUNNEL_ID CONTROL_PLANE_API_KEY_FILE
-STATE_DIR="${MCP_TUNNEL_STATE_DIR:-$PWD/../../.local/advisor}"
+STATE_DIR="${MCP_TUNNEL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-mcp/advisor}"
 SERVER_PID_FILE="$STATE_DIR/mcp.pid"
 TUNNEL_PID_FILE="$STATE_DIR/tunnel.pid"
 CLIENT_FILE="$STATE_DIR/tunnel-client.path"

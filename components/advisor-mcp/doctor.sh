@@ -14,7 +14,7 @@ else
   printf '%s\n' 'FAIL: run npm ci from the agent-mcp root'; fail=1
 fi
 config="$(printenv AGENT_MCP_CONFIG || true)"
-if [ -z "$config" ]; then config="$HOME/.config/agent-mcp/instance.json"; fi
+if [ -z "$config" ]; then config="$HOME/.config/agent-mcp/instance.amd64.json"; fi
 if [ -r "$config" ] && node src/config-cli.mjs "$config" >/dev/null 2>&1; then
   printf '%s\n' 'PASS: private instance config and advisor allowlist validate'
   mapfile -d '' -t values < <(node src/config-cli.mjs "$config")

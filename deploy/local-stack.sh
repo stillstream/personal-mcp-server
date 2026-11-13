@@ -3,14 +3,15 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 CONFIG=$(printenv AGENT_MCP_CONFIG || true)
-if [ -z "$CONFIG" ]; then CONFIG="$ROOT/config/instance.local.json"; fi
+if [ -z "$CONFIG" ]; then CONFIG="$HOME/.config/agent-mcp/instance.amd64.json"; fi
 BASE=$(printenv AGENT_MCP_HOME || true)
-if [ -z "$BASE" ]; then BASE="$ROOT/.local"; fi
+if [ -z "$BASE" ]; then BASE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-mcp"; fi
 RELEASE=$(printenv AGENT_MCP_RELEASE || true)
 if [ -z "$RELEASE" ]; then RELEASE="$ROOT"; fi
 SERVICE="$ROOT/deploy/service.sh"
-ADVISOR_STATE_DIR="$ROOT/.local/advisor"
-ROLLBACK_DIR="$ROOT/.local/rollback"
+ADVISOR_STATE_DIR="$BASE/advisor"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/agent-mcp"
+ROLLBACK_DIR="$STATE_ROOT/rollback"
 CUTOVER_STARTED=0
 
 load_config() {
@@ -78,7 +79,7 @@ start_stack() {
   [ -f "$release/src/server.mjs" ] || { echo "Gateway release missing: $release" >&2; return 2; }
   advisor_script="$release/components/advisor-mcp/start-openai-tunnel.sh"
   [ -x "$advisor_script" ] || { echo "Advisor release script missing: $advisor_script" >&2; return 2; }
-  "$SERVICE" start "$release" "$CONFIG"
+  "$SERVICE" start "$CONFIG"
   if ! AGENT_MCP_CONFIG="$CONFIG" "$advisor_script" up; then
     "$SERVICE" stop || true
     return 1
@@ -102,7 +103,7 @@ restore_legacy() {
   stop_stack >/dev/null 2>&1 || true
   "$SERVICE" stop >/dev/null 2>&1 || true
   legacy_state="$(systemctl --user show agent-mcp-shadow.service -p ActiveState --value 2>/dev/null || true)"
-  if [ "$legacy_state" != active ] && [ -f "$release/src/server.mjs" ]; then "$SERVICE" start "$release" "$CONFIG" >/dev/null 2>&1 || true; fi
+  if [ "$legacy_state" != active ] && [ -f "$release/src/server.mjs" ]; then "$SERVICE" start "$CONFIG" >/dev/null 2>&1 || true; fi
   if [ -x "$advisor_dir/start-openai-tunnel.sh" ]; then
     env -u AGENT_MCP_CONFIG AGENT_MCP_GATEWAY_CLIENT_CONFIG="$HOME/.config/agent-mcp/shadow/chatgpt.client.json" CONTROL_PLANE_TUNNEL_ID="$TUNNEL_ID" CONTROL_PLANE_API_KEY_FILE="$API_KEY_FILE" MCP_TUNNEL_STATE_DIR="$state_dir" "$advisor_dir/start-openai-tunnel.sh" up >/dev/null 2>&1 || true
   fi
